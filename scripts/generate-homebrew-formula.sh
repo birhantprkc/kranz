@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 VERSION OWNER/REPOSITORY OUTPUT" >&2
+if [[ $# -ne 4 ]]; then
+  echo "usage: $0 VERSION OWNER/REPOSITORY CHECKSUMS OUTPUT" >&2
   exit 2
 fi
 
 tag="$1"
 repository="$2"
-output="$3"
+checksums_file="$3"
+output="$4"
 version="${tag#v}"
 
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
@@ -19,37 +20,68 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
   echo "repository must use OWNER/REPOSITORY format: $repository" >&2
   exit 2
 fi
-
-source_url="https://github.com/${repository}/archive/refs/tags/v${version}.tar.gz"
-sha256="${SOURCE_SHA256:-}"
-if [[ -z "$sha256" ]]; then
-  sha256="$(curl --fail --silent --show-error --location "$source_url" | shasum -a 256 | awk '{print $1}')"
-fi
-if [[ ! "$sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
-  echo "SOURCE_SHA256 must contain 64 hexadecimal characters" >&2
+if [[ ! -f "$checksums_file" ]]; then
+  echo "checksums file does not exist: $checksums_file" >&2
   exit 2
 fi
-sha256="$(printf '%s' "$sha256" | tr '[:upper:]' '[:lower:]')"
+
+checksum_for() {
+  local archive="$1"
+  local checksum
+
+  checksum="$(awk -v archive="$archive" '$2 == archive { print $1 }' "$checksums_file")"
+  if [[ ! "$checksum" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "expected exactly one SHA-256 checksum for ${archive}" >&2
+    exit 1
+  fi
+  printf '%s' "$checksum" | tr '[:upper:]' '[:lower:]'
+}
+
+darwin_arm64_archive="kranz_${version}_Darwin_arm64.tar.gz"
+darwin_x86_64_archive="kranz_${version}_Darwin_x86_64.tar.gz"
+linux_arm64_archive="kranz_${version}_Linux_arm64.tar.gz"
+linux_x86_64_archive="kranz_${version}_Linux_x86_64.tar.gz"
+
+darwin_arm64_sha256="$(checksum_for "$darwin_arm64_archive")"
+darwin_x86_64_sha256="$(checksum_for "$darwin_x86_64_archive")"
+linux_arm64_sha256="$(checksum_for "$linux_arm64_archive")"
+linux_x86_64_sha256="$(checksum_for "$linux_x86_64_archive")"
+release_url="https://github.com/${repository}/releases/download/v${version}"
 
 mkdir -p "$(dirname "$output")"
 cat >"$output" <<RUBY
 class Kranz < Formula
   desc "Keyboard-first local service orchestrator with a terminal UI"
   homepage "https://github.com/${repository}"
-  url "${source_url}"
-  sha256 "${sha256}"
+  version "${version}"
   license "MIT"
 
-  depends_on "go" => :build
+  on_macos do
+    on_arm do
+      url "${release_url}/${darwin_arm64_archive}"
+      sha256 "${darwin_arm64_sha256}"
+    end
+
+    on_intel do
+      url "${release_url}/${darwin_x86_64_archive}"
+      sha256 "${darwin_x86_64_sha256}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "${release_url}/${linux_arm64_archive}"
+      sha256 "${linux_arm64_sha256}"
+    end
+
+    on_intel do
+      url "${release_url}/${linux_x86_64_archive}"
+      sha256 "${linux_x86_64_sha256}"
+    end
+  end
 
   def install
-    ldflags = %W[
-      -s -w
-      -X main.version=#{version}
-      -X main.commit=v#{version}
-      -X main.buildTime=release
-    ]
-    system "go", "build", *std_go_args(ldflags:), "./cmd/kranz"
+    bin.install "kranz"
   end
 
   test do

@@ -43,8 +43,9 @@ Kranz (German for “wreath”) keeps a project’s local services, logs, health
 brew install kranz-org/tap/kranz
 ```
 
-Homebrew builds Kranz from the versioned release tag and verifies its source
-checksum. The tap is updated automatically for every stable GitHub release.
+Homebrew downloads the prebuilt archive for the current operating system and
+architecture and verifies its checksum. The tap is updated automatically for
+every stable GitHub release.
 
 ### GitHub release
 

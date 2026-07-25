@@ -57,5 +57,3 @@ changelog:
 release:
   prerelease: auto
   make_latest: true
-  extra_files:
-    - glob: .release/kranz.rb

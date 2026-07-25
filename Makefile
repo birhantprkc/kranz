@@ -1,4 +1,4 @@
-.PHONY: all build run install fmt-check test vet verify lint clean snapshot release-check tag
+.PHONY: all build run install fmt-check test vet verify lint clean snapshot release-check homebrew-formula-check tag
 
 APP_NAME := kranz
 BIN_DIR := bin
@@ -32,7 +32,7 @@ test:
 vet:
 	$(GO) vet ./...
 
-verify: fmt-check vet test build
+verify: fmt-check vet test build homebrew-formula-check
 
 lint:
 	@command -v golangci-lint >/dev/null || (echo "golangci-lint is not installed" >&2; exit 1)
@@ -40,6 +40,9 @@ lint:
 
 release-check:
 	$(GORELEASER) check
+
+homebrew-formula-check:
+	./scripts/test-generate-homebrew-formula.sh
 
 snapshot:
 	$(GORELEASER) release --snapshot --clean
