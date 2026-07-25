@@ -4,6 +4,18 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-25
+
+### Added
+
+- Compact dashboard panels that collapse inactive sections in short terminals.
+- Width-aware Details rendering for ports, ownership, directories, descriptions, tags, dependencies, checks, lifecycle settings, environment files, and commands.
+
+### Fixed
+
+- Mouse-wheel navigation in the Services and Tags panel.
+- Homebrew formula generation to install the published release binaries correctly.
+
 ## [0.1.0] - 2026-07-22
 
 ### Added
@@ -16,5 +28,6 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 - Explicit global-user and project-config save destinations in the live theme picker.
 - Native compatibility for common Process Compose configurations.
 
-[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/kranz-org/kranz/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/kranz-org/kranz/releases/tag/v0.1.0
