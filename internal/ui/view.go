@@ -13,6 +13,11 @@ import (
 	"github.com/kranz-org/kranz/internal/service"
 )
 
+const (
+	compactDashboardHeight = 21
+	collapsedPanelHeight   = 1
+)
+
 // View renders the complete Bubble Tea frame.
 func (m *Model) View() string {
 	if !m.ready {
@@ -104,11 +109,31 @@ func (m *Model) renderLogColumn(width, height int) string {
 	if pinned == nil {
 		return m.renderLogPanel(m.FocusedService(), width, height)
 	}
-	topHeight := height / 2
-	bottomHeight := height - topHeight
+	topHeight, bottomHeight := m.logColumnLayout(height)
 	top := m.renderPinnedLogPanel(pinned, width, topHeight)
-	bottom := m.renderLogPanel(m.FocusedService(), width, bottomHeight)
+	if topHeight == collapsedPanelHeight {
+		top = renderCollapsedPanel("[3] PINNED LOGS  "+pinned.Name, width)
+	}
+	focused := m.FocusedService()
+	bottom := m.renderLogPanel(focused, width, bottomHeight)
+	if bottomHeight == collapsedPanelHeight {
+		title := "[3] LOGS"
+		if focused != nil {
+			title += "  " + focused.Name
+		}
+		bottom = renderCollapsedPanel(title, width)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, top, bottom)
+}
+
+func (m *Model) logColumnLayout(height int) (pinnedHeight, currentHeight int) {
+	if height <= compactDashboardHeight-dashboardHeaderRows-dashboardFooterRows {
+		if m.panelFocus == panelPinnedLogs {
+			return max(collapsedPanelHeight, height-collapsedPanelHeight), collapsedPanelHeight
+		}
+		return collapsedPanelHeight, max(collapsedPanelHeight, height-collapsedPanelHeight)
+	}
+	return splitPanelHeights(height)
 }
 
 func (m *Model) panelStyle(focus panelFocus) lipgloss.Style {
@@ -651,11 +676,28 @@ func (m *Model) renderThemeView() string {
 func (m *Model) renderServiceColumn(width, height int) string {
 	listHeight, detailHeight := m.serviceColumnLayout(height)
 	serviceList := m.renderServicePanel(width, listHeight)
+	if listHeight == collapsedPanelHeight {
+		title := "[1] SERVICES"
+		if m.listMode == listTags {
+			title = "[1] TAGS"
+		}
+		serviceList = renderCollapsedPanel(title, width)
+	}
 	details := m.renderServiceDetails(m.FocusedService(), width, detailHeight)
+	if detailHeight == collapsedPanelHeight {
+		details = renderCollapsedPanel("[2] DETAILS", width)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, serviceList, details)
 }
 
 func (m *Model) serviceColumnLayout(height int) (listHeight, detailHeight int) {
+	if height <= compactDashboardHeight-dashboardHeaderRows-dashboardFooterRows {
+		if m.panelFocus == panelDetails {
+			return collapsedPanelHeight, max(collapsedPanelHeight, height-collapsedPanelHeight)
+		}
+		return max(collapsedPanelHeight, height-collapsedPanelHeight), collapsedPanelHeight
+	}
+
 	itemCount := len(m.services)
 	if m.listMode == listTags {
 		itemCount = len(m.currentTags())
@@ -670,10 +712,25 @@ func (m *Model) serviceColumnLayout(height int) (listHeight, detailHeight int) {
 	)
 	desiredHeight := min(itemCount, maxVisibleItems) + panelChromeRows
 	listHeight = max(minPanelHeight, desiredHeight)
-	if listHeight > height-minPanelHeight {
-		listHeight = max(minPanelHeight, height-minPanelHeight)
+	if height < listHeight*2 {
+		return splitPanelHeights(height)
 	}
 	return listHeight, height - listHeight
+}
+
+func splitPanelHeights(height int) (topHeight, bottomHeight int) {
+	topHeight = max(0, height/2)
+	return topHeight, max(0, height-topHeight)
+}
+
+func renderCollapsedPanel(title string, width int) string {
+	if width <= 1 {
+		return PanelTitleStyle.Copy().Foreground(ColorDim).Render(ansi.Truncate(title, max(1, width), "…"))
+	}
+	contentWidth := width - 2
+	title = ansi.Truncate(title, contentWidth, "…")
+	title += strings.Repeat(" ", max(0, contentWidth-lipgloss.Width(title)))
+	return " " + PanelTitleStyle.Copy().Foreground(ColorDim).Render(title) + " "
 }
 
 func (m *Model) mouseInDetails(x, y int) bool {
@@ -905,7 +962,7 @@ func (m *Model) renderServiceDetails(svc *service.Service, width, height int) st
 		return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(title + "\n\nNo service selected")
 	}
 
-	lines := m.serviceDetailLines(svc)
+	lines := m.serviceDetailLines(svc, contentWidth)
 	viewportHeight := max(1, contentHeight-1)
 	maxOffset := max(0, len(lines)-viewportHeight)
 	offset := min(m.detailOffset, maxOffset)
@@ -921,73 +978,87 @@ func (m *Model) renderServiceDetails(svc *service.Service, width, height int) st
 	return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(strings.Join(visible, "\n"))
 }
 
-func (m *Model) serviceDetailLines(svc *service.Service) []string {
+func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []string {
 	visualState := m.serviceVisualState(svc)
 	lines := []string{
 		serviceStatusIndicator(visualState) + " " + ServiceNameStyle.Render(svc.Name) + "  " +
 			ContextBarStyle.Render(serviceStatusLabel(svc.Status(), visualState)),
-		DetailLabelStyle.Render("PID") + " " + detailValue(fmt.Sprintf("%d", svc.PID())) +
-			"   " + DetailLabelStyle.Render("DIR") + " " + detailValue(svc.Config.Dir),
 	}
+	lines = append(lines, pidDirectoryDetailLines(svc.PID(), svc.Config.Dir, contentWidth)...)
 	if visualState == visualQueued {
 		reason := "Scheduled by the current start operation"
 		if len(svc.Config.DependsOn) > 0 {
 			reason = "Waiting for dependencies: " + strings.Join(svc.Config.DependsOn, ", ")
 		}
-		lines = append(lines, DetailLabelStyle.Render("START")+" "+StartingBadgeStyle.Render(reason))
+		lines = append(lines, detailFieldLines("START", StartingBadgeStyle.Render(reason), contentWidth)...)
 	}
 	if svc.Config.Description != "" {
-		lines = append(lines, DetailLabelStyle.Render("ABOUT")+" "+detailValue(svc.Config.Description))
+		lines = append(lines, detailFieldLines("ABOUT", svc.Config.Description, contentWidth)...)
 	}
-	lines = append(lines, m.renderPortDetailLines(svc)...)
-	lines = append(lines,
-		DetailLabelStyle.Render("TAGS")+" "+detailValue(joinOrDash(svc.Config.Tags)),
-	)
-	lines = append(lines, dependencyDetailLines(svc)...)
-	lines = append(lines, m.healthDetailLines("READINESS", healthReadiness(svc), m.readinessSummary(svc))...)
-	lines = append(lines, m.healthDetailLines("LIVENESS", healthLiveness(svc), m.livenessSummary(svc))...)
+	lines = append(lines, m.renderPortDetailLines(svc, contentWidth)...)
+	if len(svc.Config.Tags) == 0 {
+		lines = append(lines, detailFieldLines("TAGS", "—", contentWidth)...)
+	} else {
+		lines = append(lines, detailListItemsLines("TAGS", svc.Config.Tags, ", ", contentWidth)...)
+	}
+	lines = append(lines, dependencyDetailLines(svc, contentWidth)...)
+	lines = append(lines, m.healthDetailLines("READINESS", healthReadiness(svc), m.readinessSummary(svc), contentWidth)...)
+	lines = append(lines, m.healthDetailLines("LIVENESS", healthLiveness(svc), m.livenessSummary(svc), contentWidth)...)
 	if svc.Config.ReadyLogLine != "" {
-		lines = append(lines, DetailLabelStyle.Render("READY LOG")+" "+detailValue(svc.Config.ReadyLogLine))
+		lines = append(lines, detailFieldLines("READY LOG", svc.Config.ReadyLogLine, contentWidth)...)
 	}
-	lines = append(lines, availabilityDetailLines(svc)...)
-	lines = append(lines, shutdownDetailLines(svc)...)
+	lines = append(lines, availabilityDetailLines(svc, contentWidth)...)
+	lines = append(lines, shutdownDetailLines(svc, contentWidth)...)
 	if len(svc.Config.EnvFiles) > 0 {
-		lines = append(lines, DetailLabelStyle.Render("ENV FILES")+" "+detailValue(strings.Join(svc.Config.EnvFiles, ", ")))
+		lines = append(lines, detailFieldLines("ENV FILES", strings.Join(svc.Config.EnvFiles, ", "), contentWidth)...)
 	}
 	if len(svc.Config.SuccessExitCodes) > 0 {
 		codes := make([]string, 0, len(svc.Config.SuccessExitCodes))
 		for _, code := range svc.Config.SuccessExitCodes {
 			codes = append(codes, strconv.Itoa(code))
 		}
-		lines = append(lines, DetailLabelStyle.Render("SUCCESS")+" "+detailValue("0, "+strings.Join(codes, ", ")))
+		lines = append(lines, detailFieldLines("SUCCESS", "0, "+strings.Join(codes, ", "), contentWidth)...)
 	}
 	if svc.Config.Disabled {
 		lines = append(lines, StartingBadgeStyle.Render("DISABLED")+" "+detailValue("manual start only"))
 	}
-	lines = append(lines, DetailLabelStyle.Render("COMMAND")+" "+detailValue(svc.Config.Command))
+	lines = append(lines, detailFieldLines("COMMAND", svc.Config.Command, contentWidth)...)
 	return lines
 }
 
-func dependencyDetailLines(svc *service.Service) []string {
+func dependencyDetailLines(svc *service.Service, contentWidth int) []string {
 	if len(svc.Config.DependsOn) == 0 {
-		return []string{DetailLabelStyle.Render("DEPENDS") + " " + detailValue("—")}
+		return detailFieldLines("DEPENDS", "—", contentWidth)
 	}
-	lines := make([]string, 0, len(svc.Config.DependsOn))
-	for index, dependency := range svc.Config.DependsOn {
-		label := "       "
-		if index == 0 {
-			label = "DEPENDS"
-		}
+	parts := make([]string, 0, len(svc.Config.DependsOn))
+	conditions := make([]string, 0, len(svc.Config.DependsOn))
+	for _, dependency := range svc.Config.DependsOn {
 		condition := config.DependencyHealthy
 		if configured, ok := svc.Config.DependencyConditions[dependency]; ok && configured.Condition != "" {
 			condition = configured.Condition
 		}
-		lines = append(lines, DetailLabelStyle.Render(label)+" "+detailValue(dependency+" · "+string(condition)))
+		parts = append(parts, dependency+" · "+string(condition))
+		conditions = append(conditions, string(condition))
+	}
+	combined := strings.Join(parts, "; ")
+	if lipgloss.Width("DEPENDS "+combined) <= contentWidth {
+		return detailFieldLines("DEPENDS", combined, contentWidth)
+	}
+
+	lines := []string{DetailLabelStyle.Render("DEPENDS")}
+	for index, dependency := range svc.Config.DependsOn {
+		part := parts[index]
+		if lipgloss.Width("  ↳ "+part) <= contentWidth {
+			lines = append(lines, ContextBarStyle.Render("  ↳ ")+detailValue(part))
+			continue
+		}
+		lines = append(lines, detailArrowValueLines(dependency, contentWidth)...)
+		lines = append(lines, detailIndentedValueLines(conditions[index], "    ", contentWidth)...)
 	}
 	return lines
 }
 
-func availabilityDetailLines(svc *service.Service) []string {
+func availabilityDetailLines(svc *service.Service, contentWidth int) []string {
 	availability := svc.Config.Availability
 	policy := availability.Restart
 	if policy == "" {
@@ -1011,10 +1082,10 @@ func availabilityDetailLines(svc *service.Service) []string {
 	if availability.ExitOnSkipped {
 		parts = append(parts, "exit on skipped")
 	}
-	return detailSectionLines("RECOVERY", parts)
+	return detailSectionLines("RECOVERY", parts, contentWidth)
 }
 
-func shutdownDetailLines(svc *service.Service) []string {
+func shutdownDetailLines(svc *service.Service, contentWidth int) []string {
 	shutdown := svc.Config.Shutdown
 	timeout := shutdown.Timeout
 	if timeout <= 0 {
@@ -1025,27 +1096,35 @@ func shutdownDetailLines(svc *service.Service) []string {
 		target = "parent only"
 	}
 	if shutdown.Command != "" {
-		return detailSectionLines("SHUTDOWN", []string{"command " + shutdown.Command, "timeout " + timeout.String()})
+		return detailSectionLines("SHUTDOWN", []string{"command " + shutdown.Command, "timeout " + timeout.String()}, contentWidth)
 	}
 	signal := shutdown.Signal
 	if signal == 0 {
 		signal = 15
 	}
-	return detailSectionLines("SHUTDOWN", []string{fmt.Sprintf("signal %d", signal), "timeout " + timeout.String(), "target " + target})
+	return detailSectionLines("SHUTDOWN", []string{fmt.Sprintf("signal %d", signal), "timeout " + timeout.String(), "target " + target}, contentWidth)
 }
 
-func detailSectionLines(label string, parts []string) []string {
+func detailSectionLines(label string, parts []string, contentWidth int) []string {
 	lines := []string{DetailLabelStyle.Render(label)}
 	for _, part := range parts {
-		lines = append(lines, ContextBarStyle.Render("  ↳ ")+detailValue(part))
+		lines = append(lines, detailArrowValueLines(part, contentWidth)...)
 	}
 	return lines
 }
 
-func (m *Model) healthDetailLines(label string, check *config.CheckConfig, status string) []string {
-	lines := []string{DetailLabelStyle.Render(label) + " " + status}
+func detailListItemsLines(label string, parts []string, separator string, contentWidth int) []string {
+	combined := strings.Join(parts, separator)
+	if lipgloss.Width(label+" "+combined) <= contentWidth {
+		return detailFieldLines(label, combined, contentWidth)
+	}
+	return detailSectionLines(label, parts, contentWidth)
+}
+
+func (m *Model) healthDetailLines(label string, check *config.CheckConfig, status string, contentWidth int) []string {
+	lines := detailFieldLines(label, status, contentWidth)
 	if check != nil {
-		lines = append(lines, ContextBarStyle.Render(checkDescription(check)))
+		lines = append(lines, detailArrowValueLines(checkDescription(check), contentWidth)...)
 	}
 	return lines
 }
@@ -1072,11 +1151,12 @@ func (m *Model) scrollDetails(direction int) {
 	}
 	_, detailHeight := m.serviceColumnLayout(m.height - 2)
 	viewportHeight := max(1, detailHeight-3)
-	maxOffset := max(0, len(m.serviceDetailLines(svc))-viewportHeight)
+	contentWidth := max(1, m.dashboardLeftWidth()-2)
+	maxOffset := max(0, len(m.serviceDetailLines(svc, contentWidth))-viewportHeight)
 	m.detailOffset = min(maxOffset, max(0, m.detailOffset+direction))
 }
 
-func (m *Model) renderPortDetailLines(svc *service.Service) []string {
+func (m *Model) renderPortDetailLines(svc *service.Service, contentWidth int) []string {
 	if len(svc.Config.Ports) == 0 {
 		return []string{DetailLabelStyle.Render("PORTS") + " " + detailValue("—")}
 	}
@@ -1087,12 +1167,12 @@ func (m *Model) renderPortDetailLines(svc *service.Service) []string {
 		if index == 0 {
 			label = "PORTS"
 		}
-		lines = append(lines, m.renderPortDetail(svc, portNumber, label)...)
+		lines = append(lines, m.renderPortDetail(svc, portNumber, label, contentWidth)...)
 	}
 	return lines
 }
 
-func (m *Model) renderPortDetail(svc *service.Service, portNumber int, label string) []string {
+func (m *Model) renderPortDetail(svc *service.Service, portNumber int, label string, contentWidth int) []string {
 	prefix := DetailLabelStyle.Render(label) + " " + PortStyle.Render(fmt.Sprintf("%d", portNumber)) + " "
 	if m.portService != svc.Name || (m.portScanBusy && m.portChecked.IsZero()) {
 		return []string{prefix + StartingBadgeStyle.Render("checking…")}
@@ -1101,17 +1181,22 @@ func (m *Model) renderPortDetail(svc *service.Service, portNumber int, label str
 		return []string{prefix + FailedBadgeStyle.Render("unavailable")}
 	}
 	if info := m.portDetails[portNumber]; info != nil {
-		return renderListeningPort(prefix, info, m.manager.ManagedServiceForPID(info.PID))
+		return renderListeningPort(prefix, info, m.manager.ManagedServiceForPID(info.PID), contentWidth)
 	}
 	return []string{prefix + StoppedBadgeStyle.Render("free")}
 }
 
-func renderListeningPort(prefix string, info *config.PortInfo, managedService string) []string {
+func renderListeningPort(prefix string, info *config.PortInfo, managedService string, contentWidth int) []string {
 	line := prefix + RunningBadgeStyle.Render("listening")
-	if endpoint := listenerEndpoint(info); endpoint != "" {
-		line += ContextBarStyle.Render(" · " + endpoint)
-	}
 	lines := []string{line}
+	if endpoint := listenerEndpoint(info); endpoint != "" {
+		withEndpoint := line + ContextBarStyle.Render(" · "+endpoint)
+		if lipgloss.Width(withEndpoint) <= contentWidth {
+			lines[0] = withEndpoint
+		} else {
+			lines = append(lines, detailArrowValueLines(endpoint, contentWidth)...)
+		}
+	}
 	owner := make([]string, 0, 2)
 	if info.Process != "" {
 		owner = append(owner, info.Process)
@@ -1126,9 +1211,101 @@ func renderListeningPort(prefix string, info *config.PortInfo, managedService st
 		} else if info.PID > 0 {
 			ownership = "owner: external"
 		}
-		lines = append(lines, DetailLabelStyle.Render("     ")+" "+ContextBarStyle.Render(
-			"↳ "+strings.Join(owner, " · ")+" · "+ownership,
-		))
+		ownershipWarning := managedService == ""
+		combined := strings.Join(append(append([]string(nil), owner...), ownership), " · ")
+		if lipgloss.Width("  ↳ "+combined) <= contentWidth {
+			line := ContextBarStyle.Render("  ↳ ") + detailValue(strings.Join(owner, " · ")) + ContextBarStyle.Render(" · ")
+			lines = append(lines, line+renderPortOwnership(ownership, ownershipWarning))
+		} else {
+			for _, part := range owner {
+				lines = append(lines, detailArrowValueLines(part, contentWidth)...)
+			}
+			lines = append(lines, ContextBarStyle.Render("  ↳ ")+renderPortOwnership(ownership, ownershipWarning))
+		}
+	}
+	return lines
+}
+
+func renderPortOwnership(ownership string, warning bool) string {
+	if warning {
+		return StartingBadgeStyle.Render(ownership)
+	}
+	return detailValue(ownership)
+}
+
+func detailFieldLines(label, value string, contentWidth int) []string {
+	inline := label + " " + value
+	if lipgloss.Width(inline) <= contentWidth {
+		return []string{DetailLabelStyle.Render(label) + " " + detailValue(value)}
+	}
+	lines := []string{DetailLabelStyle.Render(label)}
+	return append(lines, detailArrowValueLines(value, contentWidth)...)
+}
+
+func pidDirectoryDetailLines(pid int, directory string, contentWidth int) []string {
+	pidValue := strconv.Itoa(pid)
+	if lipgloss.Width("PID "+pidValue+"   DIR "+directory) <= contentWidth {
+		return []string{
+			DetailLabelStyle.Render("PID") + " " + detailValue(pidValue) +
+				"   " + DetailLabelStyle.Render("DIR") + " " + detailValue(directory),
+		}
+	}
+	lines := []string{DetailLabelStyle.Render("PID") + " " + detailValue(pidValue)}
+	return append(lines, wrappedLabeledDetailLines("DIR", directory, contentWidth)...)
+}
+
+func wrappedLabeledDetailLines(label, value string, contentWidth int) []string {
+	prefixWidth := lipgloss.Width(label + " ")
+	available := max(1, contentWidth-prefixWidth)
+	wrapped := wrapDetailValue(value, available)
+	lines := make([]string, 0, len(wrapped))
+	for index, part := range wrapped {
+		if index == 0 {
+			lines = append(lines, DetailLabelStyle.Render(label)+" "+detailValue(part))
+			continue
+		}
+		lines = append(lines, strings.Repeat(" ", prefixWidth)+detailValue(part))
+	}
+	return lines
+}
+
+func detailArrowValueLines(value string, contentWidth int) []string {
+	const (
+		arrowPrefix        = "  ↳ "
+		continuationPrefix = "    "
+	)
+	available := max(1, contentWidth-lipgloss.Width(arrowPrefix))
+	wrapped := wrapDetailValue(value, available)
+	lines := make([]string, 0, len(wrapped))
+	for index, part := range wrapped {
+		prefix := continuationPrefix
+		if index == 0 {
+			prefix = arrowPrefix
+		}
+		lines = append(lines, ContextBarStyle.Render(prefix)+detailValue(part))
+	}
+	return lines
+}
+
+func detailIndentedValueLines(value, prefix string, contentWidth int) []string {
+	available := max(1, contentWidth-lipgloss.Width(prefix))
+	wrapped := wrapDetailValue(value, available)
+	lines := make([]string, 0, len(wrapped))
+	for _, part := range wrapped {
+		lines = append(lines, ContextBarStyle.Render(prefix)+detailValue(part))
+	}
+	return lines
+}
+
+func wrapDetailValue(value string, width int) []string {
+	wordWrapped := strings.Split(ansi.Wordwrap(value, width, "/,"), "\n")
+	lines := make([]string, 0, len(wordWrapped))
+	for _, line := range wordWrapped {
+		if lipgloss.Width(line) <= width {
+			lines = append(lines, line)
+			continue
+		}
+		lines = append(lines, strings.Split(ansi.Hardwrap(line, width, false), "\n")...)
 	}
 	return lines
 }
@@ -1434,7 +1611,7 @@ func (m *Model) scrollLogs(direction int) {
 func (m *Model) currentLogPanelHeight() int {
 	height := max(1, m.height-2)
 	if m.PinnedService() != nil {
-		height -= height / 2
+		_, height = m.logColumnLayout(height)
 	}
 	return height
 }
@@ -1444,7 +1621,8 @@ func (m *Model) pinnedLogPanelHeight() int {
 	if m.PinnedService() == nil {
 		return height
 	}
-	return height / 2
+	height, _ = m.logColumnLayout(height)
+	return height
 }
 
 func (m *Model) displayedPinnedLogLineCount() int {

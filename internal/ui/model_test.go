@@ -699,14 +699,124 @@ func TestListeningPortUsesConciseOwnershipParameter(t *testing.T) {
 		{name: "unknown", info: &config.PortInfo{Process: "listener"}, want: "owner: unknown"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			plain := ansi.Strip(strings.Join(renderListeningPort("", testCase.info, testCase.managedService), "\n"))
+			rendered := strings.Join(renderListeningPort("", testCase.info, testCase.managedService, 80), "\n")
+			plain := ansi.Strip(rendered)
 			if !strings.Contains(plain, testCase.want) {
 				t.Fatalf("port ownership = %q, want %q", plain, testCase.want)
 			}
 			if strings.Contains(plain, "Kranz ·") || strings.Contains(plain, "· api") {
 				t.Fatalf("port ownership repeats product/service context: %q", plain)
 			}
+			if testCase.managedService == "" && !strings.Contains(rendered, StartingBadgeStyle.Render(testCase.want)) {
+				t.Fatalf("non-Kranz ownership is not highlighted: %q", rendered)
+			}
 		})
+	}
+}
+
+func TestListeningPortWrapsOwnershipToAvailableWidth(t *testing.T) {
+	info := &config.PortInfo{Process: "node", PID: 4321}
+	narrow := renderListeningPort("PORTS 3000 ", info, "", 30)
+	plain := ansi.Strip(strings.Join(narrow, "\n"))
+	for _, expected := range []string{"\n  ↳ node", "\n  ↳ PID 4321", "\n  ↳ owner: external"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("narrow port ownership does not contain %q:\n%s", expected, plain)
+		}
+	}
+	for _, line := range narrow {
+		if width := lipgloss.Width(line); width > 30 {
+			t.Fatalf("narrow port line width = %d, want at most 30: %q", width, ansi.Strip(line))
+		}
+	}
+
+	wide := ansi.Strip(strings.Join(renderListeningPort("PORTS 3000 ", info, "", 80), "\n"))
+	if !strings.Contains(wide, "\n  ↳ node · PID 4321 · owner: external") {
+		t.Fatalf("wide port ownership was needlessly split:\n%s", wide)
+	}
+}
+
+func TestLongDetailFieldWrapsBelowItsLabel(t *testing.T) {
+	lines := detailFieldLines("ABOUT", "A long service description that cannot fit beside its label", 28)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	if !strings.HasPrefix(plain, "ABOUT\n  ↳ ") {
+		t.Fatalf("long ABOUT field is not structured below its label:\n%s", plain)
+	}
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > 28 {
+			t.Fatalf("ABOUT line width = %d, want at most 28: %q", width, ansi.Strip(line))
+		}
+	}
+
+	short := ansi.Strip(strings.Join(detailFieldLines("ABOUT", "Worker", 28), "\n"))
+	if short != "ABOUT Worker" {
+		t.Fatalf("short ABOUT field = %q, want inline value", short)
+	}
+}
+
+func TestDirectoryMovesBelowPIDAndWrapsWithoutArrow(t *testing.T) {
+	lines := pidDirectoryDetailLines(0, "apps/event-processor/a-very-long-subdirectory", 28)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	if !strings.HasPrefix(plain, "PID 0\nDIR apps/") || strings.Contains(plain, "↳") {
+		t.Fatalf("narrow PID/DIR layout is not a plain labeled block:\n%s", plain)
+	}
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > 28 {
+			t.Fatalf("PID/DIR line width = %d, want at most 28: %q", width, ansi.Strip(line))
+		}
+	}
+
+	wide := ansi.Strip(strings.Join(pidDirectoryDetailLines(0, "apps/event-processor", 80), "\n"))
+	if wide != "PID 0   DIR apps/event-processor" {
+		t.Fatalf("wide PID/DIR layout = %q, want one line", wide)
+	}
+}
+
+func TestServiceDetailBlocksRespectAvailableWidth(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	svc := model.FocusedService()
+	svc.Config.Tags = []string{"backend", "payments", "internal", "critical", "worker"}
+	svc.Config.DependsOn = []string{"database-primary", "message-broker"}
+	svc.Config.DependencyConditions = map[string]config.DependencyConfig{
+		"database-primary": {Condition: config.DependencyHealthy},
+		"message-broker":   {Condition: config.DependencyLogReady},
+	}
+	svc.Config.ReadyLogLine = "Application started and ready to accept incoming connections"
+	svc.Config.EnvFiles = []string{"config/base.env", "config/development.env", "config/secrets.local.env"}
+	svc.Config.Command = "node --enable-source-maps ./src/workers/event-processor.js"
+	svc.Config.Shutdown.Command = "scripts/gracefully-stop-event-processor --wait-for-jobs"
+	svc.Config.HealthCheck = &config.HealthCheckConfig{Readiness: &config.CheckConfig{
+		Type: config.CheckHTTP,
+		URL:  "http://localhost:8080/internal/health/readiness",
+	}}
+
+	const width = 28
+	lines := model.serviceDetailLines(svc, width)
+	for _, line := range lines {
+		if lineWidth := lipgloss.Width(line); lineWidth > width {
+			t.Fatalf("detail line width = %d, want at most %d: %q", lineWidth, width, ansi.Strip(line))
+		}
+	}
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	for _, expected := range []string{"TAGS\n  ↳ ", "DEPENDS\n  ↳ database-primary", "READY LOG\n  ↳ ", "ENV FILES\n  ↳ ", "COMMAND\n  ↳ "} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("responsive details do not contain %q:\n%s", expected, plain)
+		}
+	}
+	for _, item := range []string{"backend", "payments", "internal", "critical", "worker", "database-primary", "message-broker"} {
+		if !strings.Contains(plain, "\n  ↳ "+item) {
+			t.Fatalf("wrapped list item %q is not on its own line:\n%s", item, plain)
+		}
+	}
+	for _, condition := range []string{"process_healthy", "process_log_ready"} {
+		if !strings.Contains(plain, "\n    "+condition) {
+			t.Fatalf("wrapped dependency condition %q is not on its own line:\n%s", condition, plain)
+		}
+	}
+
+	wideTags := ansi.Strip(strings.Join(detailListItemsLines("TAGS", []string{"backend", "worker"}, ", ", 80), "\n"))
+	if wideTags != "TAGS backend, worker" {
+		t.Fatalf("wide tags = %q, want inline list", wideTags)
 	}
 }
 
@@ -754,7 +864,7 @@ func TestServiceStatusUsesQueuedAndRuntimeVisualStates(t *testing.T) {
 	if line := ansi.Strip(model.renderServiceLine(model.focused, svc, 50)); !strings.Contains(line, "queued") {
 		t.Fatalf("queued service line = %q", line)
 	}
-	if details := ansi.Strip(strings.Join(model.serviceDetailLines(svc), "\n")); !strings.Contains(details, "Queued") || !strings.Contains(details, "Waiting for dependencies: database") {
+	if details := ansi.Strip(strings.Join(model.serviceDetailLines(svc, 80), "\n")); !strings.Contains(details, "Queued") || !strings.Contains(details, "Waiting for dependencies: database") {
 		t.Fatalf("queued service details:\n%s", details)
 	}
 	if _, pending, _ := model.serviceCounts(); pending != 1 {
@@ -958,8 +1068,66 @@ func TestServiceColumnShowsUpToTwentyItems(t *testing.T) {
 	}
 	model.services = model.allServices
 	listHeight, detailHeight = model.serviceColumnLayout(22)
-	if listHeight != 16 || detailHeight != 6 {
-		t.Fatalf("25-item, 22-row column split = %d/%d, want usable 16/6", listHeight, detailHeight)
+	if listHeight != 11 || detailHeight != 11 {
+		t.Fatalf("25-item, 22-row column split = %d/%d, want balanced 11/11", listHeight, detailHeight)
+	}
+}
+
+func TestCompactDashboardCollapsesInactivePanels(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 100, compactDashboardHeight, true
+	panelHeight := model.height - dashboardHeaderRows - dashboardFooterRows
+
+	listHeight, detailHeight := model.serviceColumnLayout(panelHeight)
+	if listHeight != panelHeight-collapsedPanelHeight || detailHeight != collapsedPanelHeight {
+		t.Fatalf("compact service split = %d/%d, want %d/%d", listHeight, detailHeight, panelHeight-collapsedPanelHeight, collapsedPanelHeight)
+	}
+	if renderedHeight := lipgloss.Height(model.renderServiceColumn(40, panelHeight)); renderedHeight != panelHeight {
+		t.Fatalf("compact service column height = %d, want %d", renderedHeight, panelHeight)
+	}
+
+	model.panelFocus = panelDetails
+	listHeight, detailHeight = model.serviceColumnLayout(panelHeight)
+	if listHeight != collapsedPanelHeight || detailHeight != panelHeight-collapsedPanelHeight {
+		t.Fatalf("focused detail split = %d/%d, want %d/%d", listHeight, detailHeight, collapsedPanelHeight, panelHeight-collapsedPanelHeight)
+	}
+
+	pressKey(model, '#')
+	model.panelFocus = panelLogs
+	pinnedHeight, currentHeight := model.logColumnLayout(panelHeight)
+	if pinnedHeight != collapsedPanelHeight || currentHeight != panelHeight-collapsedPanelHeight {
+		t.Fatalf("compact log split = %d/%d, want %d/%d", pinnedHeight, currentHeight, collapsedPanelHeight, panelHeight-collapsedPanelHeight)
+	}
+	model.panelFocus = panelPinnedLogs
+	pinnedHeight, currentHeight = model.logColumnLayout(panelHeight)
+	if pinnedHeight != panelHeight-collapsedPanelHeight || currentHeight != collapsedPanelHeight {
+		t.Fatalf("focused pinned split = %d/%d, want %d/%d", pinnedHeight, currentHeight, panelHeight-collapsedPanelHeight, collapsedPanelHeight)
+	}
+	if renderedHeight := lipgloss.Height(model.renderLogColumn(60, panelHeight)); renderedHeight != panelHeight {
+		t.Fatalf("compact log column height = %d, want %d", renderedHeight, panelHeight)
+	}
+
+	collapsed := ansi.Strip(renderCollapsedPanel("[2] DETAILS", 40))
+	if !strings.HasPrefix(collapsed, " [2] DETAILS") || lipgloss.Width(collapsed) != 40 {
+		t.Fatalf("collapsed title is not aligned inside its 40-column panel: %q", collapsed)
+	}
+}
+
+func TestMouseWheelMovesThroughServices(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 100, 24, true
+
+	start := model.focused
+	_, _ = model.handleMouseMsg(tea.MouseMsg{X: 1, Y: dashboardHeaderRows + 1, Button: tea.MouseButtonWheelDown})
+	if model.panelFocus != panelServices || model.focused != start+1 {
+		t.Fatalf("wheel down over services focused panel %v and service %d, want %v and %d", model.panelFocus, model.focused, panelServices, start+1)
+	}
+
+	_, _ = model.handleMouseMsg(tea.MouseMsg{X: 1, Y: dashboardHeaderRows + 1, Button: tea.MouseButtonWheelUp})
+	if model.focused != start {
+		t.Fatalf("wheel up over services focused service %d, want %d", model.focused, start)
 	}
 }
 
@@ -1015,9 +1183,9 @@ func TestHealthTargetsStartAtFirstColumn(t *testing.T) {
 		{check: &config.CheckConfig{Type: config.CheckHTTP, URL: "http://localhost:3801/healthz"}, want: "http://localhost:3801/healthz"},
 		{check: &config.CheckConfig{Type: config.CheckTCP, Port: 3801}, want: "tcp://localhost:3801"},
 	} {
-		lines := model.healthDetailLines("READINESS", testCase.check, "waiting")
-		if got := ansi.Strip(lines[1]); got != testCase.want {
-			t.Errorf("health target line = %q, want %q", got, testCase.want)
+		lines := model.healthDetailLines("READINESS", testCase.check, "waiting", 80)
+		if got, want := ansi.Strip(lines[1]), "  ↳ "+testCase.want; got != want {
+			t.Errorf("health target line = %q, want %q", got, want)
 		}
 	}
 }
@@ -1245,7 +1413,7 @@ func TestDetailsShowLifecycleConfiguration(t *testing.T) {
 			model.focused = index
 		}
 	}
-	plain := ansi.Strip(strings.Join(model.serviceDetailLines(model.FocusedService()), "\n"))
+	plain := ansi.Strip(strings.Join(model.serviceDetailLines(model.FocusedService(), 80), "\n"))
 	for _, expected := range []string{
 		"db · process_log_ready", "RECOVERY\n  ↳ restart on_failure\n  ↳ backoff 2s\n  ↳ limit 3",
 		"SHUTDOWN\n  ↳ signal 2\n  ↳ timeout 5s\n  ↳ target parent only",

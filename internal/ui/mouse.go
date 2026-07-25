@@ -86,6 +86,20 @@ func (m *Model) handleDashboardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleDashboardWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) {
+	if msg.X >= 0 && msg.X < m.dashboardLeftWidth() && msg.Y >= dashboardHeaderRows {
+		listHeight, _ := m.serviceColumnLayout(m.height - dashboardHeaderRows - dashboardFooterRows)
+		if msg.Y < dashboardHeaderRows+listHeight {
+			m.panelFocus = panelServices
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.movePanelCursor(-1)
+				return m, nil, true
+			case tea.MouseButtonWheelDown:
+				m.movePanelCursor(1)
+				return m, nil, true
+			}
+		}
+	}
 	if m.mouseInDetails(msg.X, msg.Y) {
 		m.panelFocus = panelDetails
 		switch msg.Button {
@@ -136,7 +150,8 @@ func (m *Model) logPanelFocusAt(y int) panelFocus {
 	if m.PinnedService() == nil {
 		return panelLogs
 	}
-	if y < dashboardHeaderRows+(m.height-dashboardHeaderRows-dashboardFooterRows)/2 {
+	topHeight, _ := m.logColumnLayout(m.height - dashboardHeaderRows - dashboardFooterRows)
+	if y < dashboardHeaderRows+topHeight {
 		return panelPinnedLogs
 	}
 	return panelLogs
