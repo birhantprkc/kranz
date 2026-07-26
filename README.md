@@ -16,6 +16,10 @@
 
 Kranz (German for “wreath”) keeps a project’s local services, logs, health checks, and listening ports in one place. Its numbered panel navigation follows the same working model as lazygit: services and details on the left, with the focused service’s output on the right.
 
+<p align="center">
+  <img src="docs/assets/kranz-demo.gif" alt="Kranz application demo">
+</p>
+
 ## Features
 
 - Centralized start, stop, restart, and shutdown
