@@ -194,8 +194,17 @@ func (m *Model) handleTagRowClick(row, listHeight, column int) {
 	if index < start || index >= end {
 		return
 	}
-	m.tagCursor = index
-	if column >= checkboxMinColumn && column <= checkboxMaxColumn {
+	m.focusTagRow(index)
+	tagRow, ok := m.focusedTagRow()
+	if !ok {
+		return
+	}
+	checkboxStart, checkboxEnd := checkboxMinColumn, checkboxMaxColumn
+	if tagRow.Service != nil {
+		checkboxStart += 2
+		checkboxEnd += 2
+	}
+	if column >= checkboxStart && column <= checkboxEnd {
 		m.toggleCurrentSelection()
 	}
 }

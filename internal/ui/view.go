@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -370,6 +371,7 @@ func helpEntries() []helpEntry {
 		{"3 again", "Switch focus between pinned and current logs"},
 		{"↑/↓ j/k", "Navigate or scroll focused panel"},
 		{"t", "Toggle Services/Tags from any panel"},
+		{"Enter", "In Tags: expand or collapse services below the focused tag"},
 		{"Space", "Select/unselect service or tag"},
 		{"s", "Start stopped or stop running targets"},
 		{"Shift+S", "Start targets directly without dependency checks"},
@@ -684,6 +686,13 @@ func (m *Model) renderServiceColumn(width, height int) string {
 		serviceList = renderCollapsedPanel(title, width)
 	}
 	details := m.renderServiceDetails(m.FocusedService(), width, detailHeight)
+	if m.listMode == listTags {
+		if svc := m.focusedTagService(); svc != nil {
+			details = m.renderServiceDetails(svc, width, detailHeight)
+		} else {
+			details = m.renderTagDetails(m.focusedTag(), width, detailHeight)
+		}
+	}
 	if detailHeight == collapsedPanelHeight {
 		details = renderCollapsedPanel("[2] DETAILS", width)
 	}
@@ -700,7 +709,7 @@ func (m *Model) serviceColumnLayout(height int) (listHeight, detailHeight int) {
 
 	itemCount := len(m.services)
 	if m.listMode == listTags {
-		itemCount = len(m.currentTags())
+		itemCount = len(m.tagRows())
 	}
 
 	// A panel needs one title row and two border rows in addition to its items.
@@ -790,27 +799,43 @@ func (m *Model) renderTagPanel(width, height int) string {
 	contentWidth := max(1, width-2)
 	contentHeight := max(1, height-2)
 	tags := m.currentTags()
-	title := fmt.Sprintf("[1] TAGS  %d  · 1 → Services", len(tags))
+	rows := m.tagRows()
+	title := fmt.Sprintf("[1] TAGS  %d  · Enter expand", len(tags))
 	if len(m.selectedTags) > 0 {
 		title += fmt.Sprintf("  SELECTED %d", len(m.selectedTags))
+	} else if len(m.selected) > 0 {
+		title += fmt.Sprintf("  SERVICES %d", len(m.selected))
 	}
 	lines := []string{renderPanelTitle(title, contentWidth)}
-	if len(tags) == 0 {
+	if len(rows) == 0 {
 		lines = append(lines, "", "No tags")
 	} else {
 		start, end := m.visibleTagRange(height)
 		for index := start; index < end; index++ {
-			tag := tags[index]
+			row := rows[index]
 			marker := "  "
 			if index == m.tagCursor {
 				marker = HelpKeyStyle.Render("› ")
 			}
 			check := "[ ]"
-			if containsTagStr(m.selectedTags, tag) {
-				check = RunningBadgeStyle.Render("[✓]")
+			var line string
+			if row.Service == nil {
+				if containsTagStr(m.selectedTags, row.Tag) {
+					check = RunningBadgeStyle.Render("[✓]")
+				}
+				disclosure := "▸"
+				if m.expandedTags[row.Tag] {
+					disclosure = "▾"
+				}
+				count := len(m.servicesForTag(row.Tag))
+				line = fmt.Sprintf("%s%s %s %s (%d)", marker, check, disclosure, row.Tag, count)
+			} else {
+				if m.selected[row.Service.Name] {
+					check = RunningBadgeStyle.Render("[✓]")
+				}
+				visualState := m.serviceVisualState(row.Service)
+				line = fmt.Sprintf("%s  %s %s %s", marker, check, serviceStatusIndicator(visualState), row.Service.Name)
 			}
-			count := len(m.cfg.GetServicesByTags([]string{tag}))
-			line := fmt.Sprintf("%s%s %s (%d)", marker, check, tag, count)
 			line = ansi.Truncate(line, contentWidth, "…")
 			if lipgloss.Width(line) < contentWidth {
 				line += strings.Repeat(" ", contentWidth-lipgloss.Width(line))
@@ -828,16 +853,16 @@ func (m *Model) renderTagPanel(width, height int) string {
 }
 
 func (m *Model) visibleTagRange(height int) (start, end int) {
-	tags := m.currentTags()
+	rows := m.tagRows()
 	available := max(1, height-3) // border rows plus the title row
-	if len(tags) <= available {
-		return 0, len(tags)
+	if len(rows) <= available {
+		return 0, len(rows)
 	}
 	start = max(0, m.tagCursor-available/2)
-	if start+available > len(tags) {
-		start = max(0, len(tags)-available)
+	if start+available > len(rows) {
+		start = max(0, len(rows)-available)
 	}
-	return start, min(len(tags), start+available)
+	return start, min(len(rows), start+available)
 }
 
 // renderServiceLine renders selection, health state, name, and unread log count.
@@ -976,6 +1001,115 @@ func (m *Model) renderServiceDetails(svc *service.Service, width, height int) st
 		visible[i] = ansi.Truncate(visible[i], contentWidth, "…")
 	}
 	return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(strings.Join(visible, "\n"))
+}
+
+func (m *Model) renderTagDetails(tag string, width, height int) string {
+	contentWidth := max(1, width-2)
+	contentHeight := max(1, height-2)
+	if tag == "" {
+		title := renderPanelTitle("[2] TAG DETAILS", contentWidth)
+		return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(title + "\n\nNo tag selected")
+	}
+
+	lines := m.tagDetailLines(tag, contentWidth)
+	viewportHeight := max(1, contentHeight-1)
+	maxOffset := max(0, len(lines)-viewportHeight)
+	offset := min(m.detailOffset, maxOffset)
+	end := min(len(lines), offset+viewportHeight)
+	title := "[2] TAG DETAILS"
+	if maxOffset > 0 {
+		title = fmt.Sprintf("[2] TAG DETAILS  %d–%d/%d  ↑/↓", offset+1, end, len(lines))
+	}
+	visible := append([]string{renderPanelTitle(title, contentWidth)}, lines[offset:end]...)
+	for index := range visible {
+		visible[index] = ansi.Truncate(visible[index], contentWidth, "…")
+	}
+	return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(strings.Join(visible, "\n"))
+}
+
+func (m *Model) tagDetailLines(tag string, contentWidth int) []string {
+	services := m.servicesForTag(tag)
+	stateCounts := make(map[string]int)
+	ports := make(map[int]bool)
+	relatedTags := make(map[string]bool)
+	serviceNames := make(map[string]bool)
+	for _, svc := range services {
+		serviceNames[svc.Name] = true
+		state := serviceStatusLabel(svc.Status(), m.serviceVisualState(svc))
+		stateCounts[state]++
+		for _, portNumber := range svc.Config.Ports {
+			ports[portNumber] = true
+		}
+		for _, related := range svc.Config.Tags {
+			if !strings.EqualFold(related, tag) {
+				relatedTags[related] = true
+			}
+		}
+	}
+
+	statuses := make([]string, 0, len(stateCounts))
+	for _, state := range []string{"Running", "Starting", "Queued", "Stopping", "Unhealthy", "Stopped"} {
+		if count := stateCounts[state]; count > 0 {
+			statuses = append(statuses, fmt.Sprintf("%d %s", count, strings.ToLower(state)))
+		}
+	}
+	lines := []string{
+		ServiceNameStyle.Render("#" + tag),
+	}
+	lines = append(lines, detailFieldLines("SUMMARY", fmt.Sprintf("%d services · %s", len(services), strings.Join(statuses, " · ")), contentWidth)...)
+
+	serviceParts := make([]string, 0, len(services))
+	externalDependencies := make(map[string]bool)
+	for _, svc := range services {
+		state := serviceStatusLabel(svc.Status(), m.serviceVisualState(svc))
+		part := serviceStatusIndicator(m.serviceVisualState(svc)) + " " + svc.Name + " · " + strings.ToLower(state)
+		if len(svc.Config.Ports) > 0 {
+			configuredPorts := make([]string, 0, len(svc.Config.Ports))
+			for _, portNumber := range svc.Config.Ports {
+				configuredPorts = append(configuredPorts, ":"+strconv.Itoa(portNumber))
+			}
+			part += " · " + strings.Join(configuredPorts, ", ")
+		}
+		serviceParts = append(serviceParts, part)
+		for _, dependency := range svc.Config.DependsOn {
+			if !serviceNames[dependency] {
+				externalDependencies[dependency] = true
+			}
+		}
+	}
+	lines = append(lines, detailSectionLines("SERVICES", serviceParts, contentWidth)...)
+
+	portNumbers := make([]int, 0, len(ports))
+	for portNumber := range ports {
+		portNumbers = append(portNumbers, portNumber)
+	}
+	sort.Ints(portNumbers)
+	portParts := make([]string, 0, len(portNumbers))
+	for _, portNumber := range portNumbers {
+		portParts = append(portParts, strconv.Itoa(portNumber))
+	}
+	if len(portParts) == 0 {
+		portParts = []string{"—"}
+	}
+	lines = append(lines, detailListItemsLines("PORTS", portParts, ", ", contentWidth)...)
+
+	related := sortedStringSet(relatedTags)
+	lines = append(lines, detailListItemsLines("RELATED", related, ", ", contentWidth)...)
+	dependencies := sortedStringSet(externalDependencies)
+	lines = append(lines, detailListItemsLines("DEPENDS", dependencies, ", ", contentWidth)...)
+	return lines
+}
+
+func sortedStringSet(values map[string]bool) []string {
+	items := make([]string, 0, len(values))
+	for value := range values {
+		items = append(items, value)
+	}
+	sort.Strings(items)
+	if len(items) == 0 {
+		return []string{"—"}
+	}
+	return items
 }
 
 func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []string {
@@ -1144,15 +1278,20 @@ func healthLiveness(svc *service.Service) *config.CheckConfig {
 }
 
 func (m *Model) scrollDetails(direction int) {
-	svc := m.FocusedService()
-	if svc == nil {
-		m.detailOffset = 0
-		return
-	}
 	_, detailHeight := m.serviceColumnLayout(m.height - 2)
 	viewportHeight := max(1, detailHeight-3)
 	contentWidth := max(1, m.dashboardLeftWidth()-2)
-	maxOffset := max(0, len(m.serviceDetailLines(svc, contentWidth))-viewportHeight)
+	lineCount := 0
+	if m.listMode == listTags {
+		if svc := m.focusedTagService(); svc != nil {
+			lineCount = len(m.serviceDetailLines(svc, contentWidth))
+		} else {
+			lineCount = len(m.tagDetailLines(m.focusedTag(), contentWidth))
+		}
+	} else if svc := m.FocusedService(); svc != nil {
+		lineCount = len(m.serviceDetailLines(svc, contentWidth))
+	}
+	maxOffset := max(0, lineCount-viewportHeight)
 	m.detailOffset = min(maxOffset, max(0, m.detailOffset+direction))
 }
 

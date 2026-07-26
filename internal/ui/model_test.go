@@ -441,7 +441,7 @@ func TestMouseActivatesDashboardAndModalControls(t *testing.T) {
 	if model.listMode != listTags {
 		t.Fatal("clicking the focused [1] title did not switch to tags")
 	}
-	clickRenderedText(t, model, "[ ] backend")
+	clickRenderedText(t, model, "[ ] ▸ backend")
 	if len(model.selectedTags) != 1 || model.selectedTags[0] != "backend" {
 		t.Fatalf("clicking a tag checkbox selected %v", model.selectedTags)
 	}
@@ -1049,6 +1049,124 @@ func TestOneFocusesListThenTogglesServicesAndTags(t *testing.T) {
 	}
 }
 
+func TestTagsExpandServicesInlineAndToggleWithEnter(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Tag details",
+		Services: map[string]config.Service{
+			"database": {
+				Command: "exit 0", Dir: ".", Shell: "sh", Ports: []int{5432}, Tags: []string{"data", "core"},
+			},
+			"api": {
+				Command: "exit 0", Dir: ".", Shell: "sh", Ports: []int{8080},
+				Tags: []string{"backend", "core"}, DependsOn: []string{"database"},
+			},
+			"worker": {
+				Command: "exit 0", Dir: ".", Shell: "sh",
+				Tags: []string{"backend", "jobs"}, DependsOn: []string{"database"},
+			},
+		},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 100, 30, true
+
+	pressKey(model, 't')
+	for index, row := range model.tagRows() {
+		if row.Tag == "backend" {
+			model.tagCursor = index
+			break
+		}
+	}
+	plain := ansi.Strip(model.renderServiceColumn(48, model.height-2))
+	for _, expected := range []string{
+		"TAG DETAILS", "#backend", "2 services", "api · stopped · :8080",
+		"worker · stopped", "PORTS 8080", "RELATED", "core", "jobs",
+		"DEPENDS database",
+	} {
+		if !strings.Contains(plain, expected) {
+			t.Errorf("tag details do not contain %q:\n%s", expected, plain)
+		}
+	}
+
+	_, command := model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	if command != nil {
+		t.Fatal("tag expansion scheduled an unexpected command")
+	}
+	if model.listMode != listTags || !model.expandedTags["backend"] || len(model.services) != len(model.allServices) {
+		t.Fatalf("expansion = mode %v expanded %v services %d/%d",
+			model.listMode, model.expandedTags["backend"], len(model.services), len(model.allServices))
+	}
+
+	plain = ansi.Strip(model.renderServiceColumn(48, model.height-2))
+	for _, expected := range []string{"▾ backend (2)", "api", "worker"} {
+		if !strings.Contains(plain, expected) {
+			t.Errorf("expanded tag does not contain %q:\n%s", expected, plain)
+		}
+	}
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyDown})
+	if svc := model.focusedTagService(); svc == nil || svc.Name != "api" {
+		t.Fatalf("first expanded child = %v, want api", svc)
+	}
+	plain = ansi.Strip(model.renderServiceColumn(48, model.height-2))
+	if !strings.Contains(plain, "DETAILS") || !strings.Contains(plain, "● api  Stopped") || strings.Contains(plain, "TAG DETAILS") {
+		t.Fatalf("child focus did not switch to service details:\n%s", plain)
+	}
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	if !model.selected["api"] || len(model.selectedTags) != 0 {
+		t.Fatalf("child selection = services %v tags %v", model.selected, model.selectedTags)
+	}
+	if targets := model.selectedTargetNames(); len(targets) != 1 || targets[0] != "api" {
+		t.Fatalf("expanded child targets = %v", targets)
+	}
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyUp})
+	if model.focusedTagService() != nil || model.focusedTag() != "backend" {
+		t.Fatalf("up from child did not return to backend tag")
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.expandedTags["backend"] {
+		t.Fatal("second Enter did not collapse backend")
+	}
+	plain = ansi.Strip(model.renderServicePanel(48, 12))
+	if strings.Contains(plain, "▾ backend") {
+		t.Fatalf("collapsed tag still renders expanded disclosure:\n%s", plain)
+	}
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	if !model.selected["api"] || !model.selected["worker"] || len(model.selected) != 2 {
+		t.Fatalf("selecting backend selected services %v", model.selected)
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	plain = ansi.Strip(model.renderServicePanel(48, 12))
+	for _, expected := range []string{"[✓] ▾ backend", "[✓] ● api", "[✓] ● worker"} {
+		if !strings.Contains(plain, expected) {
+			t.Errorf("selected tag expansion does not contain %q:\n%s", expected, plain)
+		}
+	}
+}
+
+func TestMovingTagCursorChangesDetailsWithoutMovingServiceFocus(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 80, 24, true
+	pressKey(model, 't')
+	serviceIndex := model.focused
+	firstTag := model.focusedTag()
+	model.detailOffset = 3
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyDown})
+	if model.focused != serviceIndex {
+		t.Fatalf("tag navigation moved service focus from %d to %d", serviceIndex, model.focused)
+	}
+	if model.focusedTag() == firstTag {
+		t.Fatalf("tag cursor did not move from %q", firstTag)
+	}
+	if model.detailOffset != 0 {
+		t.Fatalf("tag navigation kept stale detail offset %d", model.detailOffset)
+	}
+}
+
 func TestServiceColumnShowsUpToTwentyItems(t *testing.T) {
 	services := make(map[string]config.Service, 25)
 	for index := range 25 {
@@ -1145,14 +1263,14 @@ func TestTagsPanelSelectsLifecycleTargets(t *testing.T) {
 	if model.listMode != listTags || model.panelFocus != panelServices {
 		t.Fatalf("tag view state = mode %v panel %v", model.listMode, model.panelFocus)
 	}
-	if len(model.selected) != 0 || len(model.selectedTags) != 1 || model.selectedTags[0] != "backend" {
+	if len(model.selected) != 1 || !model.selected["api"] || len(model.selectedTags) != 1 || model.selectedTags[0] != "backend" {
 		t.Fatalf("selection = services %v tags %v", model.selected, model.selectedTags)
 	}
 	if targets := model.selectedTargetNames(); len(targets) != 1 || targets[0] != "api" {
 		t.Fatalf("backend tag targets = %v", targets)
 	}
 	plain := ansi.Strip(model.renderServicePanel(40, 8))
-	if !strings.Contains(plain, "[1] TAGS") || !strings.Contains(plain, "1 → Services") || !strings.Contains(plain, "backend (1)") {
+	if !strings.Contains(plain, "[1] TAGS") || !strings.Contains(plain, "Enter expand") || !strings.Contains(plain, "backend (1)") {
 		t.Fatalf("tag panel is incomplete:\n%s", plain)
 	}
 }

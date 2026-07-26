@@ -54,6 +54,11 @@ const (
 	listTags
 )
 
+type tagListRow struct {
+	Tag     string
+	Service *service.Service
+}
+
 type logSearchMode int
 
 const (
@@ -164,6 +169,7 @@ type Model struct {
 	showLogTime  bool
 	selectedTags []string
 	tagCursor    int
+	expandedTags map[string]bool
 
 	notifMu       sync.RWMutex
 	notifications []config.Notification
@@ -254,6 +260,7 @@ func NewModelWithOptions(cfg *config.Config, version string, options ModelOption
 		portChecker:   portChecker,
 		portDetails:   make(map[int]*config.PortInfo),
 		selected:      make(map[string]bool),
+		expandedTags:  make(map[string]bool),
 		panelFocus:    panelServices,
 		listMode:      listServices,
 		logSearcher:   kranzlog.NewSearcher(),
@@ -532,6 +539,8 @@ func (m *Model) applyDetectedBackground(dark bool, source string) tea.Cmd {
 func (m *Model) refreshServices() {
 	m.allServices = m.manager.Services()
 	m.services = m.allServices
+	rows := m.tagRows()
+	m.tagCursor = min(max(0, len(rows)-1), max(0, m.tagCursor))
 	if len(m.services) == 0 {
 		m.focused = 0
 	} else if m.focused >= len(m.services) {
@@ -796,6 +805,11 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) bool {
 	case key.Matches(msg, m.keys.Down):
 		m.movePanelCursor(1)
 		return true
+	case key.Matches(msg, m.keys.Open):
+		if m.panelFocus == panelServices && m.listMode == listTags {
+			return m.toggleFocusedTagExpansion()
+		}
+		return false
 	default:
 		return false
 	}
@@ -811,8 +825,11 @@ func (m *Model) movePanelCursor(direction int) {
 		m.scrollLogs(direction)
 	default:
 		if m.listMode == listTags {
-			tags := m.currentTags()
-			m.tagCursor = min(max(0, len(tags)-1), max(0, m.tagCursor+direction))
+			rows := m.tagRows()
+			next := min(max(0, len(rows)-1), max(0, m.tagCursor+direction))
+			if next != m.tagCursor {
+				m.focusTagRow(next)
+			}
 			return
 		}
 		next := m.focused + direction
@@ -1429,14 +1446,34 @@ func (m *Model) toggleFocusedSelection() {
 
 func (m *Model) toggleCurrentSelection() {
 	if m.listMode == listTags {
-		tags := m.currentTags()
-		if m.tagCursor >= 0 && m.tagCursor < len(tags) {
-			m.selected = make(map[string]bool)
-			m.selectedTags = toggleTag(m.selectedTags, tags[m.tagCursor])
+		row, ok := m.focusedTagRow()
+		if !ok {
+			return
+		}
+		if row.Service != nil {
+			m.selectedTags = nil
+			if m.selected[row.Service.Name] {
+				delete(m.selected, row.Service.Name)
+			} else {
+				m.selected[row.Service.Name] = true
+			}
+		} else {
+			m.selectedTags = toggleTag(m.selectedTags, row.Tag)
+			m.syncSelectedServicesFromTags()
 		}
 		return
 	}
 	m.toggleFocusedSelection()
+}
+
+func (m *Model) syncSelectedServicesFromTags() {
+	m.selected = make(map[string]bool)
+	if len(m.selectedTags) == 0 {
+		return
+	}
+	for _, name := range m.cfg.GetServicesByTags(m.selectedTags) {
+		m.selected[name] = true
+	}
 }
 
 func (m *Model) currentTags() []string {
@@ -1445,12 +1482,100 @@ func (m *Model) currentTags() []string {
 	return tags
 }
 
+func (m *Model) focusedTag() string {
+	row, ok := m.focusedTagRow()
+	if !ok {
+		return ""
+	}
+	return row.Tag
+}
+
+func (m *Model) servicesForTag(tag string) []*service.Service {
+	if tag == "" {
+		return nil
+	}
+	names := make(map[string]bool)
+	for _, name := range m.cfg.GetServicesByTags([]string{tag}) {
+		names[name] = true
+	}
+	services := make([]*service.Service, 0, len(names))
+	for _, svc := range m.allServices {
+		if names[svc.Name] {
+			services = append(services, svc)
+		}
+	}
+	return services
+}
+
+func (m *Model) tagRows() []tagListRow {
+	tags := m.currentTags()
+	rows := make([]tagListRow, 0, len(tags))
+	for _, tag := range tags {
+		rows = append(rows, tagListRow{Tag: tag})
+		if m.expandedTags[tag] {
+			for _, svc := range m.servicesForTag(tag) {
+				rows = append(rows, tagListRow{Tag: tag, Service: svc})
+			}
+		}
+	}
+	return rows
+}
+
+func (m *Model) focusedTagRow() (tagListRow, bool) {
+	rows := m.tagRows()
+	if m.tagCursor < 0 || m.tagCursor >= len(rows) {
+		return tagListRow{}, false
+	}
+	return rows[m.tagCursor], true
+}
+
+func (m *Model) focusedTagService() *service.Service {
+	row, ok := m.focusedTagRow()
+	if !ok {
+		return nil
+	}
+	return row.Service
+}
+
+func (m *Model) focusTagRow(index int) {
+	rows := m.tagRows()
+	if index < 0 || index >= len(rows) {
+		return
+	}
+	m.tagCursor = index
+	m.detailOffset = 0
+	if rows[index].Service == nil {
+		return
+	}
+	for serviceIndex, svc := range m.services {
+		if svc.Name == rows[index].Service.Name && serviceIndex != m.focused {
+			m.moveFocus(serviceIndex)
+			return
+		}
+	}
+}
+
+func (m *Model) toggleFocusedTagExpansion() bool {
+	row, ok := m.focusedTagRow()
+	if !ok || row.Service != nil {
+		return false
+	}
+	if m.expandedTags == nil {
+		m.expandedTags = make(map[string]bool)
+	}
+	m.expandedTags[row.Tag] = !m.expandedTags[row.Tag]
+	m.detailOffset = 0
+	return true
+}
+
 func (m *Model) selectedTargetNames() []string {
 	selectedTags := m.selectedTags
 	if len(selectedTags) == 0 && len(m.selected) == 0 && m.listMode == listTags {
-		tags := m.currentTags()
-		if m.tagCursor >= 0 && m.tagCursor < len(tags) {
-			selectedTags = []string{tags[m.tagCursor]}
+		if row, ok := m.focusedTagRow(); ok {
+			if row.Service != nil {
+				return []string{row.Service.Name}
+			}
+			selectedTags = []string{row.Tag}
 		}
 	}
 	if len(selectedTags) > 0 {
@@ -1489,9 +1614,11 @@ func (m *Model) selectedTargetLabel(names []string) string {
 		return fmt.Sprintf("%d selected tags", len(m.selectedTags))
 	}
 	if m.listMode == listTags && len(m.selectedTags) == 0 && len(m.selected) == 0 {
-		tags := m.currentTags()
-		if m.tagCursor >= 0 && m.tagCursor < len(tags) {
-			return "tag " + tags[m.tagCursor]
+		if row, ok := m.focusedTagRow(); ok {
+			if row.Service != nil {
+				return row.Service.Name
+			}
+			return "tag " + row.Tag
 		}
 	}
 	if len(names) > 1 {

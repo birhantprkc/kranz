@@ -194,6 +194,7 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 | `A` | Stop all services |
 | `R` | Restart services that are currently running |
 | `t` | Switch the first panel between Services and Tags |
+| `Enter` in Tags | Expand or collapse services below the focused tag |
 | `T` | Clear the tag selection |
 | `h` | Show health-check history |
 | `n` | Open notifications |
@@ -212,7 +213,7 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 | `Ctrl+O` | Open a command shell; press `Ctrl+O` again to return to Kranz |
 | `?` | Open help |
 
-When no services or tags are checked, `s` targets the focused row. Selected tags expand to all matching services, so a group such as `frontend` can be started or stopped as one target. Starting includes required dependencies. A service waiting for its dependency gate is shown with a yellow dot and an explicit `queued` label; Details names the dependencies it is waiting for. Once all targets are active or queued, the next `s` cancels/stops them—even while readiness is still pending. Enter does not control service lifecycle.
+When no services or tags are checked, `s` targets the focused row. Selected tags expand to all matching services, so a tag such as `frontend` can be started or stopped as one target. In the Tags panel, `Enter` expands matching services inline; those child rows can be focused and selected like regular services, and a second `Enter` on the tag collapses them. Starting includes required dependencies. A service waiting for its dependency gate is shown with a yellow dot and an explicit `queued` label; Details names the dependencies it is waiting for. Once all targets are active or queued, the next `s` cancels/stops them—even while readiness is still pending. Enter never controls service lifecycle.
 
 `Shift+S` is an explicit dependency override: it starts exactly the selected services, or the focused service when nothing is selected. It does not start dependency services and does not wait for dependency conditions. Port-conflict and process-ownership safety checks remain enabled.
 
