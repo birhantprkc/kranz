@@ -4,6 +4,18 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-26
+
+### Added
+
+- Expandable tag groups with aggregate details and inline service navigation.
+- Tag selection that automatically selects every matching service.
+- `Tab` and `Shift+Tab` navigation across dashboard panels, including pinned logs.
+
+### Fixed
+
+- Disabled ambiguous log pinning while a tag group row is focused.
+
 ## [0.1.1] - 2026-07-25
 
 ### Added
@@ -28,6 +40,7 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 - Explicit global-user and project-config save destinations in the live theme picker.
 - Native compatibility for common Process Compose configurations.
 
-[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kranz-org/kranz/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/kranz-org/kranz/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/kranz-org/kranz/releases/tag/v0.1.0
