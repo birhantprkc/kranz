@@ -931,6 +931,56 @@ func TestPanelFocusUsesNumbersAndContextualArrows(t *testing.T) {
 	}
 }
 
+func TestTabCyclesPanelsAndIncludesPinnedLogs(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+
+	for _, expected := range []panelFocus{panelDetails, panelLogs, panelServices} {
+		_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyTab})
+		if model.panelFocus != expected {
+			t.Fatalf("Tab focused panel %v, want %v", model.panelFocus, expected)
+		}
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if model.panelFocus != panelLogs {
+		t.Fatalf("Shift+Tab focused panel %v, want logs", model.panelFocus)
+	}
+
+	model.panelFocus = panelServices
+	pressKey(model, '#')
+	for _, expected := range []panelFocus{panelDetails, panelLogs, panelPinnedLogs, panelServices} {
+		_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyTab})
+		if model.panelFocus != expected {
+			t.Fatalf("Tab with pinned logs focused panel %v, want %v", model.panelFocus, expected)
+		}
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if model.panelFocus != panelPinnedLogs {
+		t.Fatalf("Shift+Tab with pinned logs focused panel %v, want pinned logs", model.panelFocus)
+	}
+}
+
+func TestShiftThreeIgnoresTagRowsButPinsExpandedServices(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	pressKey(model, 't')
+
+	pressKey(model, '#')
+	if model.pinnedLog != "" {
+		t.Fatalf("tag row pinned stale service %q", model.pinnedLog)
+	}
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyDown})
+	if svc := model.focusedTagService(); svc == nil || svc.Name != "api" {
+		t.Fatalf("expanded tag child = %v, want api", svc)
+	}
+	pressKey(model, '#')
+	if model.pinnedLog != "api" {
+		t.Fatalf("expanded service pinned %q, want api", model.pinnedLog)
+	}
+}
+
 func TestShiftThreePinsLogsAboveFocusedLogs(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()

@@ -799,6 +799,12 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) bool {
 			m.panelFocus = panelLogs
 		}
 		return true
+	case key.Matches(msg, m.keys.NextPanel):
+		m.cyclePanelFocus(1)
+		return true
+	case key.Matches(msg, m.keys.PreviousPanel):
+		m.cyclePanelFocus(-1)
+		return true
 	case key.Matches(msg, m.keys.Up):
 		m.movePanelCursor(-1)
 		return true
@@ -813,6 +819,22 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) bool {
 	default:
 		return false
 	}
+}
+
+func (m *Model) cyclePanelFocus(direction int) {
+	panels := []panelFocus{panelServices, panelDetails, panelLogs}
+	if m.PinnedService() != nil {
+		panels = append(panels, panelPinnedLogs)
+	}
+	current := 0
+	for index, panel := range panels {
+		if panel == m.panelFocus {
+			current = index
+			break
+		}
+	}
+	next := (current + direction + len(panels)) % len(panels)
+	m.panelFocus = panels[next]
 }
 
 func (m *Model) movePanelCursor(direction int) {
@@ -1052,6 +1074,9 @@ func (m *Model) handleHelpKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) togglePinnedLog() {
+	if m.listMode == listTags && m.focusedTagService() == nil {
+		return
+	}
 	svc := m.FocusedService()
 	if svc == nil {
 		return

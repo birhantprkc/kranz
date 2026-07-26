@@ -369,6 +369,7 @@ func helpEntries() []helpEntry {
 		{"1 / 2 / 3", "Focus panels; 1 switches Services/Tags when the list is focused"},
 		{"Shift+3", "Pin focused service logs above the active log panel"},
 		{"3 again", "Switch focus between pinned and current logs"},
+		{"Tab / Shift+Tab", "Focus the next or previous panel, including pinned logs"},
 		{"↑/↓ j/k", "Navigate or scroll focused panel"},
 		{"t", "Toggle Services/Tags from any panel"},
 		{"Enter", "In Tags: expand or collapse services below the focused tag"},

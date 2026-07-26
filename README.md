@@ -185,6 +185,7 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 |---|---|
 | `1`, `2`, `3` | Focus Services/Tags, Details, or Logs; when the list is focused, `1` switches Services/Tags |
 | `Shift+3` | Pin/unpin the focused service logs above the active log panel |
+| `Tab` / `Shift+Tab` | Focus next/previous panel, including pinned logs when present |
 | `↑` / `↓`, `j` / `k` | Move or scroll inside the focused panel |
 | `Space` | Add/remove the focused service or tag from the selection |
 | `s` | Start stopped targets, or stop them when all targets are active |

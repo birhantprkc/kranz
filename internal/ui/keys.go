@@ -7,39 +7,41 @@ import (
 
 // KeyMap defines every keyboard shortcut used by the application.
 type KeyMap struct {
-	Up           key.Binding
-	Down         key.Binding
-	Open         key.Binding
-	Select       key.Binding
-	Toggle       key.Binding
-	ForceStart   key.Binding
-	FocusList    key.Binding
-	FocusDetails key.Binding
-	FocusLogs    key.Binding
-	PinLogs      key.Binding
-	Reload       key.Binding
-	Shell        key.Binding
-	Quit         key.Binding
-	StartAll     key.Binding
-	StopAll      key.Binding
-	Restart      key.Binding
-	RestartAll   key.Binding
-	Tags         key.Binding
-	ResetTags    key.Binding
-	Health       key.Binding
-	Notifs       key.Binding
-	Search       key.Binding
-	WrapLogs     key.Binding
-	LogTime      key.Binding
-	Freeze       key.Binding
-	Clear        key.Binding
-	Help         key.Binding
-	Escape       key.Binding
-	Kill         key.Binding
-	Skip         key.Binding
-	Cancel       key.Binding
-	Yes          key.Binding
-	No           key.Binding
+	Up            key.Binding
+	Down          key.Binding
+	Open          key.Binding
+	Select        key.Binding
+	Toggle        key.Binding
+	ForceStart    key.Binding
+	FocusList     key.Binding
+	FocusDetails  key.Binding
+	FocusLogs     key.Binding
+	NextPanel     key.Binding
+	PreviousPanel key.Binding
+	PinLogs       key.Binding
+	Reload        key.Binding
+	Shell         key.Binding
+	Quit          key.Binding
+	StartAll      key.Binding
+	StopAll       key.Binding
+	Restart       key.Binding
+	RestartAll    key.Binding
+	Tags          key.Binding
+	ResetTags     key.Binding
+	Health        key.Binding
+	Notifs        key.Binding
+	Search        key.Binding
+	WrapLogs      key.Binding
+	LogTime       key.Binding
+	Freeze        key.Binding
+	Clear         key.Binding
+	Help          key.Binding
+	Escape        key.Binding
+	Kill          key.Binding
+	Skip          key.Binding
+	Cancel        key.Binding
+	Yes           key.Binding
+	No            key.Binding
 }
 
 // DefaultKeyMap returns Kranz's standard keyboard bindings.
@@ -80,6 +82,14 @@ func DefaultKeyMap() KeyMap {
 		FocusLogs: key.NewBinding(
 			key.WithKeys("3"),
 			key.WithHelp("3", "focus logs"),
+		),
+		NextPanel: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "next panel"),
+		),
+		PreviousPanel: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "previous panel"),
 		),
 		PinLogs: key.NewBinding(
 			key.WithKeys("#", "shift+3"),
