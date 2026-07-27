@@ -323,8 +323,16 @@ func TestLogRenderingUsesSeparateTimestampAndSourceRoles(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(previousProfile)
 	defer ApplyTheme(DefaultTheme, "")
-	if _, err := ApplyTheme("forest", "#2AB630"); err != nil {
+	theme, err := ApplyTheme("forest", "#2AB630")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(LogInfoStyle.GetForeground(), lipgloss.Color(theme.Text)) {
+		t.Fatalf("info log foreground = %#v, want neutral theme text %s", LogInfoStyle.GetForeground(), theme.Text)
+	}
+	if reflect.DeepEqual(LogInfoStyle.GetForeground(), ColorAccentText) ||
+		reflect.DeepEqual(LogInfoStyle.GetForeground(), ColorGreen) {
+		t.Fatal("info log foreground inherited the green accent or status color")
 	}
 
 	line := "[12:34:56.789] [vite] page reload"
