@@ -330,6 +330,9 @@ func TestLogRenderingUsesSeparateTimestampAndSourceRoles(t *testing.T) {
 	if !reflect.DeepEqual(LogInfoStyle.GetForeground(), lipgloss.Color(theme.Text)) {
 		t.Fatalf("info log foreground = %#v, want neutral theme text %s", LogInfoStyle.GetForeground(), theme.Text)
 	}
+	if theme.Text != "#F4F4F5" {
+		t.Fatalf("forest primary text = %s, want neutral white #F4F4F5", theme.Text)
+	}
 	if reflect.DeepEqual(LogInfoStyle.GetForeground(), ColorAccentText) ||
 		reflect.DeepEqual(LogInfoStyle.GetForeground(), ColorGreen) {
 		t.Fatal("info log foreground inherited the green accent or status color")
