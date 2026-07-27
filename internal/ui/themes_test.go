@@ -224,11 +224,11 @@ func TestPanelTitlesFillWidthAndRestoreSurfaceAfterNestedStyles(t *testing.T) {
 	}
 
 	const width = 32
-	rendered := renderPanelTitle("[3] LOGS  "+ServiceNameStyle.Render("api"), width)
+	rendered := renderPanelTitle("[3] LOGS"+ContextBarStyle.Render(" │ ")+ServiceNameStyle.Render("api"), width)
 	if got := lipgloss.Width(rendered); got != width {
 		t.Fatalf("panel title width = %d, want %d", got, width)
 	}
-	if plain := ansi.Strip(rendered); !strings.HasSuffix(plain, strings.Repeat(" ", width-len("[3] LOGS  api"))) {
+	if plain := ansi.Strip(rendered); !strings.HasSuffix(plain, strings.Repeat(" ", width-len("[3] LOGS │ api"))) {
 		t.Fatalf("panel title does not fill its row: %q", plain)
 	}
 

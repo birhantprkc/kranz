@@ -115,14 +115,14 @@ func (m *Model) renderLogColumn(width, height int) string {
 	topHeight, bottomHeight := m.logColumnLayout(height)
 	top := m.renderPinnedLogPanel(pinned, width, topHeight)
 	if topHeight == collapsedPanelHeight {
-		top = renderCollapsedPanel("[3] PINNED LOGS  "+pinned.Name, width)
+		top = renderCollapsedPanel("[3] PINNED LOGS │ "+pinned.Name, width)
 	}
 	focused := m.FocusedService()
 	bottom := m.renderLogPanel(focused, width, bottomHeight)
 	if bottomHeight == collapsedPanelHeight {
 		title := "[3] LOGS"
 		if focused != nil {
-			title += "  " + focused.Name
+			title += " │ " + focused.Name
 		}
 		bottom = renderCollapsedPanel(title, width)
 	}
@@ -1578,11 +1578,11 @@ func (m *Model) renderLogPanelMode(svc *service.Service, width, height int, pinn
 	contentWidth := max(1, width-2)
 	contentHeight := max(1, height-2)
 	panelStyle := m.panelStyle(panelLogs)
-	titlePrefix := "[3] LOGS  "
+	titlePrefix := "[3] LOGS"
 	followMode, logOffset, logAnchor, logPaused := m.followMode, m.logOffset, m.logAnchor, m.logPaused
 	if pinned {
 		panelStyle = m.panelStyle(panelPinnedLogs)
-		titlePrefix = "[3] PINNED LOGS  "
+		titlePrefix = "[3] PINNED LOGS"
 		followMode, logOffset, logAnchor, logPaused = m.pinnedFollow, m.pinnedOffset, m.pinnedAnchor, false
 	}
 	if svc == nil {
@@ -1591,7 +1591,7 @@ func (m *Model) renderLogPanelMode(svc *service.Service, width, height int, pinn
 	}
 
 	visualState := m.serviceVisualState(svc)
-	title := titlePrefix + serviceStatusIndicator(visualState) + " " + ServiceNameStyle.Render(svc.Name) +
+	title := titlePrefix + ContextBarStyle.Render(" │ ") + serviceStatusIndicator(visualState) + " " + ServiceNameStyle.Render(svc.Name) +
 		ContextBarStyle.Render(" · "+strings.ToLower(serviceStatusLabel(svc.Status(), visualState)))
 	if !followMode {
 		state := "BROWSING"

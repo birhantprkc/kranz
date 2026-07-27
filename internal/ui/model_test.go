@@ -997,13 +997,13 @@ func TestLogTitleShowsColorCodedServiceStatus(t *testing.T) {
 	model.width, model.height, model.ready = 100, 24, true
 
 	title := ansi.Strip(model.renderLogPanel(model.FocusedService(), 70, 10))
-	if !strings.Contains(title, "● api · stopped") {
+	if !strings.Contains(title, "[3] LOGS │ ● api · stopped") {
 		t.Fatalf("stopped log title does not expose service state: %q", title)
 	}
 
 	model.FocusedService().SetStatus(config.StatusRunning)
 	title = ansi.Strip(model.renderLogPanel(model.FocusedService(), 70, 10))
-	if !strings.Contains(title, "● api · running") {
+	if !strings.Contains(title, "[3] LOGS │ ● api · running") {
 		t.Fatalf("running log title does not expose service state: %q", title)
 	}
 }
