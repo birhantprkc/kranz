@@ -41,6 +41,8 @@ func (m *Model) View() string {
 		content = m.renderPortConflictView()
 	case ModeConfirmRestart:
 		content = m.renderConfirmRestartView()
+	case ModeConfirmClearLogs:
+		content = m.renderConfirmClearLogsView()
 	case ModeThemes:
 		content = m.renderThemeView()
 	default:
@@ -597,6 +599,18 @@ func (m *Model) renderConfirmRestartView() string {
 	content := renderModal(
 		fmt.Sprintf(" Restart %q \n\nAlso restarts: %s\n\n[Enter/y] Continue  [Esc/n] Cancel",
 			m.confirmTarget, m.confirmAction),
+	)
+	return m.placeOverlay(content)
+}
+
+func (m *Model) renderConfirmClearLogsView() string {
+	panel := "logs"
+	if m.clearPinned {
+		panel = "pinned logs"
+	}
+	content := renderModal(
+		fmt.Sprintf(" Clear %s for %q? \n\nThis cannot be undone.\n\n[Enter] Clear  [Esc] Cancel",
+			panel, m.clearTarget),
 	)
 	return m.placeOverlay(content)
 }

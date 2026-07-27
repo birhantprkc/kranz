@@ -954,6 +954,43 @@ func TestHorizontalArrowsCycleServicesAndTagsOnlyInListPanel(t *testing.T) {
 	}
 }
 
+func TestClearLogsRequiresConfirmationForFocusedAndPinnedPanels(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	api := model.FocusedService()
+	api.AppendLog("api output")
+	model.panelFocus = panelLogs
+
+	pressKey(model, 'c')
+	if model.mode != ModeConfirmClearLogs || model.clearTarget != api.Name || model.clearPinned {
+		t.Fatalf("focused clear state = mode %v target %q pinned %v", model.mode, model.clearTarget, model.clearPinned)
+	}
+	if api.Logs.Len() != 1 {
+		t.Fatal("focused logs were cleared before confirmation")
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.mode != ModeNormal || api.Logs.Len() != 1 {
+		t.Fatal("Escape did not preserve focused logs")
+	}
+
+	model.moveFocus(1)
+	worker := model.FocusedService()
+	worker.AppendLog("worker output")
+	model.pinnedLog = api.Name
+	model.panelFocus = panelPinnedLogs
+	pressKey(model, 'c')
+	if model.mode != ModeConfirmClearLogs || model.clearTarget != api.Name || !model.clearPinned {
+		t.Fatalf("pinned clear state = mode %v target %q pinned %v", model.mode, model.clearTarget, model.clearPinned)
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	if api.Logs.Len() != 0 {
+		t.Fatal("Enter did not clear pinned logs")
+	}
+	if worker.Logs.Len() != 1 {
+		t.Fatal("clearing pinned logs cleared focused service logs")
+	}
+}
+
 func TestTabCyclesPanelsAndIncludesPinnedLogs(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()

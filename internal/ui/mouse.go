@@ -251,6 +251,15 @@ func (m *Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if renderedTextHit(rendered, msg.X, msg.Y, "[Esc/n] Cancel") {
 			m.mode = ModeNormal
 		}
+	case ModeConfirmClearLogs:
+		if renderedTextHit(rendered, msg.X, msg.Y, "[Enter] Clear") {
+			m.clearConfirmedLogs()
+		}
+		if renderedTextHit(rendered, msg.X, msg.Y, "[Esc] Cancel") {
+			m.clearTarget = ""
+			m.clearPinned = false
+			m.mode = ModeNormal
+		}
 	case ModePortConflict:
 		return m.handleMouseKeyBindings(rendered, msg, []mouseKeyBinding{
 			{label: "[k] Stop this external process and retry", key: "k"},

@@ -35,6 +35,7 @@ const (
 	ModeConfirmQuit
 	ModePortConflict
 	ModeConfirmRestart
+	ModeConfirmClearLogs
 	ModeThemes
 )
 
@@ -178,6 +179,8 @@ type Model struct {
 
 	confirmAction string
 	confirmTarget string
+	clearTarget   string
+	clearPinned   bool
 
 	conflictService  string
 	conflictPorts    map[int]*config.PortInfo
@@ -648,6 +651,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmQuitKeys(msg)
 	case ModeConfirmRestart:
 		return m.handleConfirmRestartKeys(msg)
+	case ModeConfirmClearLogs:
+		return m.handleConfirmClearLogsKeys(msg)
 	case ModePortConflict:
 		return m.handlePortConflictKeys(msg)
 	case ModeThemes:
@@ -1390,14 +1395,48 @@ func (m *Model) handleLogKey(msg tea.KeyMsg) bool {
 		}
 		return true
 	case key.Matches(msg, m.keys.Clear):
-		if svc := m.FocusedService(); svc != nil {
-			svc.ClearLogs()
-			svc.ResetNewLogCount()
-		}
-		return true
+		return m.beginClearLogs()
 	default:
 		return false
 	}
+}
+
+func (m *Model) beginClearLogs() bool {
+	var svc *service.Service
+	switch m.panelFocus {
+	case panelLogs:
+		svc = m.FocusedService()
+	case panelPinnedLogs:
+		svc = m.PinnedService()
+	default:
+		return false
+	}
+	if svc == nil {
+		return false
+	}
+	m.mode = ModeConfirmClearLogs
+	m.clearTarget = svc.Name
+	m.clearPinned = m.panelFocus == panelPinnedLogs
+	return true
+}
+
+func (m *Model) clearConfirmedLogs() {
+	svc, ok := m.manager.GetService(m.clearTarget)
+	if ok {
+		svc.ClearLogs()
+		svc.ResetNewLogCount()
+		if focused := m.FocusedService(); focused != nil && focused.Name == svc.Name {
+			m.logOffset, m.logAnchor, m.followMode, m.logPaused = 0, 0, true, false
+			m.currentMatch = -1
+		}
+		if pinned := m.PinnedService(); pinned != nil && pinned.Name == svc.Name {
+			m.pinnedOffset, m.pinnedAnchor, m.pinnedFollow = 0, 0, true
+		}
+		m.addNotification(svc.Name, "Logs cleared", config.LogInfo)
+	}
+	m.clearTarget = ""
+	m.clearPinned = false
+	m.mode = ModeNormal
 }
 
 func (m *Model) handleSearchNavigationKey(msg tea.KeyMsg) bool {
@@ -1847,6 +1886,18 @@ func (m *Model) handleConfirmRestartKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y", "enter":
 		return m.beginRestart(m.confirmTarget)
 	case "n", "N", "esc":
+		m.mode = ModeNormal
+	}
+	return m, nil
+}
+
+func (m *Model) handleConfirmClearLogsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.clearConfirmedLogs()
+	case "esc":
+		m.clearTarget = ""
+		m.clearPinned = false
 		m.mode = ModeNormal
 	}
 	return m, nil
