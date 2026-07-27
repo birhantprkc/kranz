@@ -1542,6 +1542,59 @@ func TestShiftSForceStartsOnlySelectedService(t *testing.T) {
 	}
 }
 
+func TestSStopsDependentsAndShiftSStopsOnlySelectedService(t *testing.T) {
+	newModel := func(t *testing.T) *Model {
+		t.Helper()
+		model := NewModel(&config.Config{Project: "Test", Services: map[string]config.Service{
+			"backend":  {Command: "sleep 60", Dir: ".", Shell: "sh"},
+			"frontend": {Command: "sleep 60", Dir: ".", Shell: "sh", DependsOn: []string{"backend"}},
+		}}, "test")
+		if err := model.manager.ForceStartServices([]string{"backend", "frontend"}); err != nil {
+			model.Shutdown()
+			t.Fatal(err)
+		}
+		model.selected["backend"] = true
+		return model
+	}
+
+	t.Run("s stops dependent services", func(t *testing.T) {
+		model := newModel(t)
+		defer model.Shutdown()
+		_, command := model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+		if command == nil || model.operationKind != operationStopSet {
+			t.Fatal("s did not schedule dependency-aware stop")
+		}
+		_, _ = model.Update(command().(operationResultMsg))
+		for _, name := range []string{"backend", "frontend"} {
+			svc, _ := model.manager.GetService(name)
+			if svc.Status() != config.StatusStopped {
+				t.Errorf("%s status = %s, want stopped", name, svc.Status())
+			}
+		}
+		if !strings.Contains(model.toastMessage, "dependent services stopped") {
+			t.Fatalf("normal stop notification = %q", model.toastMessage)
+		}
+	})
+
+	t.Run("Shift+S leaves dependents running", func(t *testing.T) {
+		model := newModel(t)
+		defer model.Shutdown()
+		_, command := model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+		if command == nil || model.operationKind != operationForceStop {
+			t.Fatal("Shift+S did not schedule force stop")
+		}
+		_, _ = model.Update(command().(operationResultMsg))
+		backend, _ := model.manager.GetService("backend")
+		frontend, _ := model.manager.GetService("frontend")
+		if backend.Status() != config.StatusStopped || frontend.Status() != config.StatusRunning {
+			t.Fatalf("force stop statuses: backend=%s frontend=%s", backend.Status(), frontend.Status())
+		}
+		if !strings.Contains(model.toastMessage, "without stopping dependents") {
+			t.Fatalf("force stop notification = %q", model.toastMessage)
+		}
+	})
+}
+
 func TestShiftSOverridesQueuedDependencyStart(t *testing.T) {
 	model := NewModel(&config.Config{Project: "Test", Services: map[string]config.Service{
 		"server": {Command: "sleep 60", Dir: ".", Shell: "sh", ReadyLogLine: "NEVER"},

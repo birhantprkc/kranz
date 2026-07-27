@@ -74,6 +74,7 @@ const (
 	operationStartAll   operationKind = "start-all"
 	operationStartSet   operationKind = "start-selection"
 	operationForceStart operationKind = "force-start"
+	operationForceStop  operationKind = "force-stop"
 	operationStopAll    operationKind = "stop-all"
 	operationStopSet    operationKind = "stop-selection"
 	operationRestart    operationKind = "restart"
@@ -878,7 +879,7 @@ func (m *Model) handleLifecycleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.toggleCurrentSelection()
 		return m, nil, true
 	case key.Matches(msg, m.keys.ForceStart):
-		model, command := m.forceStartSelectedServices()
+		model, command := m.forceToggleSelectedServices()
 		return model, command, true
 	case key.Matches(msg, m.keys.Toggle):
 		model, command := m.toggleSelectedServices()
@@ -1465,8 +1466,8 @@ func (m *Model) triggerAction(action string) (tea.Model, tea.Cmd) {
 	switch action {
 	case "toggle":
 		return m.toggleSelectedServices()
-	case "force-start":
-		return m.forceStartSelectedServices()
+	case "force":
+		return m.forceToggleSelectedServices()
 	case "select":
 		m.toggleFocusedSelection()
 		return m, nil
@@ -1728,7 +1729,7 @@ func serviceStartPlanned(svc *service.Service) bool {
 	return svc.Status() != config.StatusStopped || svc.DesiredRunning()
 }
 
-func (m *Model) forceStartSelectedServices() (tea.Model, tea.Cmd) {
+func (m *Model) forceToggleSelectedServices() (tea.Model, tea.Cmd) {
 	names := m.selectedTargetNames()
 	if len(names) == 0 {
 		return m, nil
@@ -1738,6 +1739,19 @@ func (m *Model) forceStartSelectedServices() (tea.Model, tea.Cmd) {
 	// the operation ID before starting the direct targets.
 	m.cancelStartOperation()
 	target := m.selectedTargetLabel(names)
+	allRunning := true
+	for _, name := range names {
+		svc, ok := m.manager.GetService(name)
+		if !ok || svc.Status() == config.StatusStopped {
+			allRunning = false
+			break
+		}
+	}
+	if allRunning {
+		return m.beginOperation(operationForceStop, target, "Force stopping "+target, func() error {
+			return m.manager.ForceStopServices(names)
+		})
+	}
 	return m.beginOperation(operationForceStart, target, "Force starting "+target, func() error {
 		return m.manager.ForceStartServices(names)
 	})
@@ -1845,8 +1859,9 @@ func (m *Model) handleOperationResult(msg operationResultMsg) (tea.Model, tea.Cm
 		operationStartAll:   "All services have been started",
 		operationStartSet:   "Selection started (required dependencies included)",
 		operationForceStart: "Selected services started without dependencies",
+		operationForceStop:  "Selected services stopped without stopping dependents",
 		operationStopAll:    "All services have been stopped",
-		operationStopSet:    "Selection stopped and its ports released",
+		operationStopSet:    "Selection and dependent services stopped; ports released",
 		operationRestart:    "Service restarted",
 		operationRestartAll: "Running services have been restarted",
 	}[msg.kind]

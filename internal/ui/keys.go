@@ -79,7 +79,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		ForceStart: key.NewBinding(
 			key.WithKeys("S", "shift+s"),
-			key.WithHelp("Shift+S", "start without dependencies"),
+			key.WithHelp("Shift+S", "start/stop without dependencies"),
 		),
 		FocusList: key.NewBinding(
 			key.WithKeys("1"),

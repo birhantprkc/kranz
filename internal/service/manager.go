@@ -626,11 +626,22 @@ func (m *Manager) StartByTags(tags []string) error {
 
 // StopAll stops every service in reverse dependency order.
 func (m *Manager) StopAll() error {
-	return m.StopServices(m.configSnapshot().ServiceNames())
+	return m.stopServices(m.configSnapshot().ServiceNames(), false)
 }
 
-// StopServices stops only the requested services, in reverse dependency order.
+// StopServices stops the requested services and every transitive dependent, in
+// reverse dependency order.
 func (m *Manager) StopServices(names []string) error {
+	return m.stopServices(names, true)
+}
+
+// ForceStopServices stops exactly the requested services without expanding
+// dependents. It is the shutdown counterpart to ForceStartServices.
+func (m *Manager) ForceStopServices(names []string) error {
+	return m.stopServices(names, false)
+}
+
+func (m *Manager) stopServices(names []string, includeDependents bool) error {
 	order, err := m.topologicalSort()
 	if err != nil {
 		order = m.configSnapshot().ServiceNames()
@@ -641,6 +652,13 @@ func (m *Manager) StopServices(names []string) error {
 			return fmt.Errorf("service %q not found", name)
 		}
 		selected[name] = true
+	}
+	if includeDependents {
+		for _, name := range names {
+			for _, dependent := range m.findDependents(name) {
+				selected[dependent] = true
+			}
+		}
 	}
 
 	var stopErrors []error

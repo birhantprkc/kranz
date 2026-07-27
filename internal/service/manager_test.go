@@ -75,6 +75,59 @@ func TestForceStartServicesSkipsDependencyClosure(t *testing.T) {
 	}
 }
 
+func TestStopServicesIncludesDependentsAndForceStopDoesNot(t *testing.T) {
+	newManager := func(t *testing.T) *Manager {
+		t.Helper()
+		manager := NewManager(&config.Config{Project: "Test", Services: map[string]config.Service{
+			"backend":  {Command: "sleep 60"},
+			"frontend": {Command: "sleep 60", DependsOn: []string{"backend"}},
+			"browser":  {Command: "sleep 60", DependsOn: []string{"frontend"}},
+			"worker":   {Command: "sleep 60"},
+		}})
+		if err := manager.ForceStartServices([]string{"backend", "frontend", "browser", "worker"}); err != nil {
+			manager.Shutdown()
+			t.Fatal(err)
+		}
+		return manager
+	}
+
+	t.Run("normal stop includes transitive dependents", func(t *testing.T) {
+		manager := newManager(t)
+		defer manager.Shutdown()
+		if err := manager.StopServices([]string{"backend"}); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"backend", "frontend", "browser"} {
+			svc, _ := manager.GetService(name)
+			if svc.Status() != config.StatusStopped {
+				t.Errorf("%s status = %s, want stopped", name, svc.Status())
+			}
+		}
+		worker, _ := manager.GetService("worker")
+		if worker.Status() != config.StatusRunning {
+			t.Fatalf("unrelated worker status = %s, want running", worker.Status())
+		}
+	})
+
+	t.Run("force stop leaves dependents running", func(t *testing.T) {
+		manager := newManager(t)
+		defer manager.Shutdown()
+		if err := manager.ForceStopServices([]string{"backend"}); err != nil {
+			t.Fatal(err)
+		}
+		backend, _ := manager.GetService("backend")
+		if backend.Status() != config.StatusStopped {
+			t.Fatalf("backend status = %s, want stopped", backend.Status())
+		}
+		for _, name := range []string{"frontend", "browser", "worker"} {
+			svc, _ := manager.GetService(name)
+			if svc.Status() != config.StatusRunning {
+				t.Errorf("%s status = %s, want running", name, svc.Status())
+			}
+		}
+	})
+}
+
 func TestExpandWithDependenciesLimitsBatchStartToRequestedClosure(t *testing.T) {
 	manager := NewManager(&config.Config{Project: "Test", Services: map[string]config.Service{
 		"database": {Command: "run database"},

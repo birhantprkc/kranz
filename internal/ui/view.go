@@ -221,10 +221,14 @@ type actionButton struct {
 func (m *Model) actionButtons() []actionButton {
 	targets := m.selectedTargetNames()
 	allActive := len(targets) > 0
+	allRunning := len(targets) > 0
 	for _, name := range targets {
-		if svc, ok := m.manager.GetService(name); !ok || !serviceStartPlanned(svc) {
+		svc, ok := m.manager.GetService(name)
+		if !ok || !serviceStartPlanned(svc) {
 			allActive = false
-			break
+		}
+		if !ok || svc.Status() == config.StatusStopped {
+			allRunning = false
 		}
 	}
 	toggleStyle := PrimaryButtonStyle
@@ -234,6 +238,10 @@ func (m *Model) actionButtons() []actionButton {
 		toggleStyle = DangerButtonStyle
 		toggleLabel = "■ Stop: s"
 		compactToggle = "Stop: s"
+	}
+	forceLabel := "Force start: S"
+	if allRunning {
+		forceLabel = "Force stop: S"
 	}
 	interruptibleStart := false
 	switch m.operationKind {
@@ -253,7 +261,7 @@ func (m *Model) actionButtons() []actionButton {
 		}
 		return []actionButton{
 			{action: "toggle", rendered: compact(toggleStyle, compactToggle)},
-			{action: "force-start", rendered: compact(WarningButtonStyle, "Force: S")},
+			{action: "force", rendered: compact(WarningButtonStyle, "Force: S")},
 			{action: "select", rendered: compact(SecondaryButtonStyle, "Select: Space")},
 			{action: "restart", rendered: compact(SecondaryButtonStyle, "Restart: r")},
 			{action: "all", rendered: compact(SecondaryButtonStyle, allLabel)},
@@ -266,7 +274,7 @@ func (m *Model) actionButtons() []actionButton {
 	}
 	return []actionButton{
 		{action: "toggle", rendered: toggleStyle.Render(toggleLabel)},
-		{action: "force-start", rendered: WarningButtonStyle.Render("Force start: S")},
+		{action: "force", rendered: WarningButtonStyle.Render(forceLabel)},
 		{action: "select", rendered: SecondaryButtonStyle.Render("✓ Select: Space")},
 		{action: "restart", rendered: SecondaryButtonStyle.Render("↻ Restart: r")},
 		{action: "all", rendered: SecondaryButtonStyle.Render(allLabel)},
@@ -378,7 +386,7 @@ func helpEntries() []helpEntry {
 		{"Enter", "In Tags: expand or collapse services below the focused tag"},
 		{"Space", "Select/unselect service or tag"},
 		{"s", "Start stopped or stop running targets"},
-		{"Shift+S", "Start targets directly without dependency checks"},
+		{"Shift+S", "Start or stop only targets, ignoring dependency expansion"},
 		{"a", "Select/clear all services"},
 		{"A", "Stop all services"},
 		{"r", "Restart selected service"},
