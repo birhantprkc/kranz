@@ -778,12 +778,13 @@ func (m *Model) renderServicePanel(width, height int) string {
 		return m.panelStyle(panelServices).Width(contentWidth).Height(contentHeight).Render(title + "\n\nNo services")
 	}
 
-	title := fmt.Sprintf("[1] SERVICES  %d  · 1 → Tags", len(m.services))
+	meta := fmt.Sprintf("%d · 1 → Tags", len(m.services))
 	if len(m.selected) > 0 {
-		title += fmt.Sprintf("  SELECTED %d", len(m.selected))
+		meta += fmt.Sprintf(" · SELECTED %d", len(m.selected))
 	} else if len(m.selectedTags) > 0 {
-		title += fmt.Sprintf("  TAGS %d", len(m.selectedTags))
+		meta += fmt.Sprintf(" · TAGS %d", len(m.selectedTags))
 	}
+	title := "[1] SERVICES" + ContextBarStyle.Render(" │ "+meta)
 	lines := []string{renderPanelTitle(title, contentWidth)}
 	start, end := m.visibleServiceRange(height)
 	for i := start; i < end; i++ {
@@ -816,12 +817,13 @@ func (m *Model) renderTagPanel(width, height int) string {
 	contentHeight := max(1, height-2)
 	tags := m.currentTags()
 	rows := m.tagRows()
-	title := fmt.Sprintf("[1] TAGS  %d  · Enter expand", len(tags))
+	meta := fmt.Sprintf("%d · Enter expand", len(tags))
 	if len(m.selectedTags) > 0 {
-		title += fmt.Sprintf("  SELECTED %d", len(m.selectedTags))
+		meta += fmt.Sprintf(" · SELECTED %d", len(m.selectedTags))
 	} else if len(m.selected) > 0 {
-		title += fmt.Sprintf("  SERVICES %d", len(m.selected))
+		meta += fmt.Sprintf(" · SERVICES %d", len(m.selected))
 	}
+	title := "[1] TAGS" + ContextBarStyle.Render(" │ "+meta)
 	lines := []string{renderPanelTitle(title, contentWidth)}
 	if len(rows) == 0 {
 		lines = append(lines, "", "No tags")
@@ -1010,7 +1012,7 @@ func (m *Model) renderServiceDetails(svc *service.Service, width, height int) st
 	end := min(len(lines), offset+viewportHeight)
 	title := "[2] DETAILS"
 	if maxOffset > 0 {
-		title = fmt.Sprintf("[2] DETAILS  %d–%d/%d  ↑/↓", offset+1, end, len(lines))
+		title += ContextBarStyle.Render(fmt.Sprintf(" │ %d–%d/%d · ↑/↓", offset+1, end, len(lines)))
 	}
 	visible := append([]string{renderPanelTitle(title, contentWidth)}, lines[offset:end]...)
 	for i := range visible {
@@ -1034,7 +1036,7 @@ func (m *Model) renderTagDetails(tag string, width, height int) string {
 	end := min(len(lines), offset+viewportHeight)
 	title := "[2] TAG DETAILS"
 	if maxOffset > 0 {
-		title = fmt.Sprintf("[2] TAG DETAILS  %d–%d/%d  ↑/↓", offset+1, end, len(lines))
+		title += ContextBarStyle.Render(fmt.Sprintf(" │ %d–%d/%d · ↑/↓", offset+1, end, len(lines)))
 	}
 	visible := append([]string{renderPanelTitle(title, contentWidth)}, lines[offset:end]...)
 	for index := range visible {

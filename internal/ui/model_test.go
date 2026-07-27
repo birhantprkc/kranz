@@ -1405,6 +1405,27 @@ func TestMouseHoverAndWheelFocusLogPanel(t *testing.T) {
 	}
 }
 
+func TestServiceAndDetailsTitlesSeparateMetadata(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+
+	services := ansi.Strip(model.renderServicePanel(48, 8))
+	if !strings.Contains(services, "[1] SERVICES │ 2 · 1 → Tags") {
+		t.Fatalf("service title does not separate metadata:\n%s", services)
+	}
+
+	details := ansi.Strip(model.renderServiceDetails(model.FocusedService(), 48, 8))
+	if !strings.Contains(details, "[2] DETAILS │ ") {
+		t.Fatalf("details title does not separate scroll metadata:\n%s", details)
+	}
+
+	model.listMode = listTags
+	tags := ansi.Strip(model.renderTagPanel(48, 8))
+	if !strings.Contains(tags, "[1] TAGS │ 2 · Enter expand") {
+		t.Fatalf("tag title does not separate metadata:\n%s", tags)
+	}
+}
+
 func TestTagsPanelSelectsLifecycleTargets(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()
