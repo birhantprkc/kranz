@@ -191,6 +191,7 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 | `Shift+3` | Pin/unpin the focused service logs above the active log panel |
 | `Tab` / `Shift+Tab` | Focus next/previous panel, including pinned logs when present |
 | `↑` / `↓`, `j` / `k` | Move or scroll inside the focused panel |
+| `←` / `→` | Cycle Services/Tags while the first panel is focused |
 | `Space` | Add/remove the focused service or tag from the selection |
 | `s` | Start stopped targets, or stop them when all targets are active |
 | `Shift+S` | Start only the selected/focused targets without checking or starting dependencies |
@@ -208,7 +209,7 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 | `w` | Toggle wrapping for long log lines |
 | `i` | Show or hide the time each log line was captured |
 | `f` | Pause or resume log following |
-| `c` | Clear selected service logs |
+| `c` | Clear focused or pinned service logs after confirmation |
 | `q` | Quit, stopping all managed processes first |
 | `Ctrl+C` | Immediately stop all managed processes and quit |
 | `Ctrl+T` | Preview themes and save them to user settings or the project config |
@@ -226,9 +227,9 @@ For a full batch, press `a`, then `s`: stopped services are started, while an en
 
 When a configured port is busy, Kranz distinguishes a listener owned by another managed service from an external process. An external conflict offers `k` to stop that exact PID and retry. Before sending a signal, Kranz scans the port again and refuses the action if the PID changed or became Kranz-owned. It tries `SIGTERM` first and only escalates after a grace period.
 
-The Details panel below the compact service list shows readiness and liveness separately, with each check target on its own line, plus ports, tags, typed dependencies, recovery state, shutdown behavior, environment files, working directory, command, and PID. Active listeners include the detected protocol and bind address (for example, `tcp://127.0.0.1:3801`) when the operating system exposes them. Focus panel `2` and use arrows to scroll when its content exceeds the available height.
+The Details panel below the compact service list shows readiness and liveness separately, with each check target on its own line, plus ports, tags, typed dependencies, recovery state, restart count and limit, last start, uptime, last exit, shutdown behavior, environment files, working directory, command, and PID. Active listeners include the detected protocol and bind address (for example, `tcp://127.0.0.1:3801`) when the operating system exposes them. Focus panel `2` and use arrows to scroll when its content exceeds the available height.
 
-Log search compiles the entered text as a regular expression and applies it only to the focused service’s bounded in-memory log buffer. Filter mode is the default and hides non-matching rows while continuing to follow new matching output. Press `Tab` in the regex editor to select Highlight mode, which keeps every row visible and supports `n`/`N` navigation. Optional timestamps are capture metadata and never become part of the searchable text. Child-process terminal control sequences are stripped before rendering so a service cannot clear or reposition the Kranz interface. It does not search log files on disk.
+Each log title includes a color-coded service-state dot and readable status. Kranz inserts visually distinct `[Kranz]` lifecycle boundaries for process starts, stops, exits, and recovery attempts. Ordinary process output uses the theme's neutral text color, while source prefixes and debug output are muted. Log search compiles the entered text as a regular expression and applies it only to the focused service’s bounded in-memory log buffer. Filter mode is the default and hides non-matching rows while continuing to follow new matching output. Press `Tab` in the regex editor to select Highlight mode, which keeps every row visible and supports `n`/`N` navigation. Optional timestamps are capture metadata and never become part of the searchable text. Child-process terminal control sequences are stripped before rendering so a service cannot clear or reposition the Kranz interface. It does not search log files on disk.
 
 `readiness` and `liveness` are independent optional blocks. Every configured block must declare its own `type` (`http`, `tcp`, or `command`); an empty `healthcheck` block is rejected.
 

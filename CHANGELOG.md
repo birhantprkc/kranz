@@ -4,6 +4,18 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+### Added
+
+- `Left` and `Right` navigation to cycle the focused Services/Tags panel.
+- Color-coded service state in focused and pinned log titles.
+- Distinct lifecycle log boundaries for starts, stops, exits, and recovery attempts.
+- Last-start, uptime, last-exit, and clearer restart-limit information in Details.
+
+### Changed
+
+- Log clearing now asks for confirmation and targets the focused log panel, including pinned logs.
+- Ordinary service output now uses neutral theme text while source prefixes are muted and Kranz lifecycle messages use a dedicated system color.
+
 ## [0.2.0] - 2026-07-26
 
 ### Added
