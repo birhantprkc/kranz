@@ -1134,6 +1134,7 @@ func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []str
 			ContextBarStyle.Render(serviceStatusLabel(svc.Status(), visualState)),
 	}
 	lines = append(lines, pidDirectoryDetailLines(svc.PID(), svc.Config.Dir, contentWidth)...)
+	lines = append(lines, runtimeDetailLines(svc, contentWidth)...)
 	if visualState == visualQueued {
 		reason := "Scheduled by the current start operation"
 		if len(svc.Config.DependsOn) > 0 {
@@ -1223,7 +1224,7 @@ func availabilityDetailLines(svc *service.Service, contentWidth int) []string {
 		if availability.MaxRestarts > 0 {
 			limit = strconv.Itoa(availability.MaxRestarts)
 		}
-		parts = append(parts, "backoff "+backoff.String(), "limit "+limit, fmt.Sprintf("restarts %d", svc.GetState().RestartCount))
+		parts = append(parts, "backoff "+backoff.String(), fmt.Sprintf("restarts %d/%s", svc.GetState().RestartCount, limit))
 	}
 	if availability.ExitOnEnd {
 		parts = append(parts, "exit on end")
@@ -1232,6 +1233,34 @@ func availabilityDetailLines(svc *service.Service, contentWidth int) []string {
 		parts = append(parts, "exit on skipped")
 	}
 	return detailSectionLines("RECOVERY", parts, contentWidth)
+}
+
+func runtimeDetailLines(svc *service.Service, contentWidth int) []string {
+	state := svc.GetState()
+	if state.StartedAt.IsZero() {
+		return nil
+	}
+
+	lines := detailFieldLines("LAST START", state.StartedAt.Local().Format("15:04:05"), contentWidth)
+	if svc.Status() != config.StatusStopped {
+		elapsed := time.Since(state.StartedAt)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		uptime := elapsed.Round(time.Second).String()
+		if elapsed < time.Second {
+			uptime = "<1s"
+		}
+		lines = append(lines, detailFieldLines("UPTIME", uptime, contentWidth)...)
+	}
+	if state.Completed {
+		exit := fmt.Sprintf("code %d", state.ExitCode)
+		if state.ExitError != "" {
+			exit += " · " + state.ExitError
+		}
+		lines = append(lines, detailFieldLines("LAST EXIT", exit, contentWidth)...)
+	}
+	return lines
 }
 
 func shutdownDetailLines(svc *service.Service, contentWidth int) []string {

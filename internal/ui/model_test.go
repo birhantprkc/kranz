@@ -1658,9 +1658,16 @@ func TestDetailsShowLifecycleConfiguration(t *testing.T) {
 			model.focused = index
 		}
 	}
+	state := model.FocusedService().GetState()
+	state.StartedAt = time.Now().Add(-2 * time.Minute)
+	state.Completed = true
+	state.ExitCode = 1
+	state.RestartCount = 2
+	model.FocusedService().SetState(state)
 	plain := ansi.Strip(strings.Join(model.serviceDetailLines(model.FocusedService(), 80), "\n"))
 	for _, expected := range []string{
-		"db · process_log_ready", "RECOVERY\n  ↳ restart on_failure\n  ↳ backoff 2s\n  ↳ limit 3",
+		"LAST START", "LAST EXIT code 1",
+		"db · process_log_ready", "RECOVERY\n  ↳ restart on_failure\n  ↳ backoff 2s\n  ↳ restarts 2/3",
 		"SHUTDOWN\n  ↳ signal 2\n  ↳ timeout 5s\n  ↳ target parent only",
 		"ENV FILES api.env", "SUCCESS 0, 7", "DISABLED manual start only",
 	} {
