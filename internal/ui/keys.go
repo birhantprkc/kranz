@@ -9,6 +9,8 @@ import (
 type KeyMap struct {
 	Up            key.Binding
 	Down          key.Binding
+	Left          key.Binding
+	Right         key.Binding
 	Open          key.Binding
 	Select        key.Binding
 	Toggle        key.Binding
@@ -54,6 +56,14 @@ func DefaultKeyMap() KeyMap {
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),
 			key.WithHelp("↓/j", "down"),
+		),
+		Left: key.NewBinding(
+			key.WithKeys("left"),
+			key.WithHelp("←", "previous list"),
+		),
+		Right: key.NewBinding(
+			key.WithKeys("right"),
+			key.WithHelp("→", "next list"),
 		),
 		Open: key.NewBinding(
 			key.WithKeys("enter"),

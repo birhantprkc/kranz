@@ -811,6 +811,12 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) bool {
 	case key.Matches(msg, m.keys.Down):
 		m.movePanelCursor(1)
 		return true
+	case key.Matches(msg, m.keys.Left), key.Matches(msg, m.keys.Right):
+		if m.panelFocus != panelServices {
+			return false
+		}
+		m.toggleListMode()
+		return true
 	case key.Matches(msg, m.keys.Open):
 		if m.panelFocus == panelServices && m.listMode == listTags {
 			return m.toggleFocusedTagExpansion()

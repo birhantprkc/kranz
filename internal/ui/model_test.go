@@ -931,6 +931,29 @@ func TestPanelFocusUsesNumbersAndContextualArrows(t *testing.T) {
 	}
 }
 
+func TestHorizontalArrowsCycleServicesAndTagsOnlyInListPanel(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+
+	if model.listMode != listServices {
+		t.Fatalf("initial list mode = %v, want services", model.listMode)
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRight})
+	if model.listMode != listTags {
+		t.Fatalf("Right list mode = %v, want tags", model.listMode)
+	}
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyLeft})
+	if model.listMode != listServices {
+		t.Fatalf("Left list mode = %v, want services", model.listMode)
+	}
+
+	model.panelFocus = panelDetails
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRight})
+	if model.listMode != listServices {
+		t.Fatalf("Right outside list panel changed mode to %v", model.listMode)
+	}
+}
+
 func TestTabCyclesPanelsAndIncludesPinnedLogs(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()
