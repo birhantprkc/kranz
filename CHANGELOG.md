@@ -10,6 +10,8 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 - Color-coded service state in focused and pinned log titles.
 - Distinct lifecycle log boundaries for starts, stops, exits, and recovery attempts.
 - Last-start, uptime, last-exit, and clearer restart-limit information in Details.
+- Dependency-aware shutdown that stops transitive dependents before their dependencies.
+- `Shift+S` forced shutdown for stopping only the selected targets.
 
 ### Changed
 

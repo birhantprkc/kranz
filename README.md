@@ -193,8 +193,8 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 | `↑` / `↓`, `j` / `k` | Move or scroll inside the focused panel |
 | `←` / `→` | Cycle Services/Tags while the first panel is focused |
 | `Space` | Add/remove the focused service or tag from the selection |
-| `s` | Start stopped targets, or stop them when all targets are active |
-| `Shift+S` | Start only the selected/focused targets without checking or starting dependencies |
+| `s` | Start targets with required dependencies, or stop targets and their dependents |
+| `Shift+S` | Start or stop only the selected/focused targets, ignoring dependency expansion |
 | `r` | Restart the selected service |
 | `a` | Select all services, or clear the full selection |
 | `A` | Stop all services |
@@ -219,9 +219,9 @@ Visible controls are clickable in terminals with mouse support: panel titles, se
 | `Ctrl+O` | Open a command shell; press `Ctrl+O` again to return to Kranz |
 | `?` | Open help |
 
-When no services or tags are checked, `s` targets the focused row. Selected tags expand to all matching services, so a tag such as `frontend` can be started or stopped as one target. In the Tags panel, `Enter` expands matching services inline; those child rows can be focused and selected like regular services, and a second `Enter` on the tag collapses them. Starting includes required dependencies. A service waiting for its dependency gate is shown with a yellow dot and an explicit `queued` label; Details names the dependencies it is waiting for. Once all targets are active or queued, the next `s` cancels/stops them—even while readiness is still pending. Enter never controls service lifecycle.
+When no services or tags are checked, `s` targets the focused row. Selected tags expand to all matching services, so a tag such as `frontend` can be started or stopped as one target. In the Tags panel, `Enter` expands matching services inline; those child rows can be focused and selected like regular services, and a second `Enter` on the tag collapses them. Starting includes required dependencies. Stopping includes every transitive dependent and processes them in reverse dependency order, so stopping a backend first stops the frontends and workers that require it. Unrelated services remain running. A service waiting for its dependency gate is shown with a yellow dot and an explicit `queued` label; Details names the dependencies it is waiting for. Once all targets are active or queued, the next `s` cancels/stops them—even while readiness is still pending. Enter never controls service lifecycle.
 
-`Shift+S` is an explicit dependency override: it starts exactly the selected services, or the focused service when nothing is selected. It does not start dependency services and does not wait for dependency conditions. Port-conflict and process-ownership safety checks remain enabled.
+`Shift+S` is an explicit dependency override in both directions. For stopped targets it starts exactly the selected services, or the focused service when nothing is selected, without starting or waiting for dependencies. For running targets it stops exactly those targets without stopping their dependents. Port-conflict and process-ownership safety checks remain enabled.
 
 For a full batch, press `a`, then `s`: stopped services are started, while an entirely active selection is stopped. Press `a` again to clear the selection. Uppercase `A` remains the immediate stop-all shortcut.
 
