@@ -38,6 +38,7 @@ var (
 	LogWarnStyle          lipgloss.Style
 	LogDebugStyle         lipgloss.Style
 	LogInfoStyle          lipgloss.Style
+	LogSystemStyle        lipgloss.Style
 	LogTimestampStyle     lipgloss.Style
 	LogSourceStyle        lipgloss.Style
 	HelpKeyStyle          lipgloss.Style
@@ -106,8 +107,9 @@ func applyPalette(theme Theme) {
 	LogWarnStyle = lipgloss.NewStyle().Foreground(ColorYellow)
 	LogDebugStyle = lipgloss.NewStyle().Foreground(ColorDim)
 	LogInfoStyle = lipgloss.NewStyle().Foreground(ColorGrey)
+	LogSystemStyle = lipgloss.NewStyle().Foreground(ColorInfo).Bold(true)
 	LogTimestampStyle = lipgloss.NewStyle().Foreground(ColorDim)
-	LogSourceStyle = lipgloss.NewStyle().Foreground(ColorInfo).Bold(true)
+	LogSourceStyle = lipgloss.NewStyle().Foreground(ColorDim)
 	HelpKeyStyle = lipgloss.NewStyle().Foreground(ColorInfo).Bold(true)
 	ModalStyle = lipgloss.NewStyle().Foreground(ColorGrey).Border(lipgloss.RoundedBorder()).BorderForeground(ColorCyan).Padding(1, 2)
 	NewLogIndicatorStyle = lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)

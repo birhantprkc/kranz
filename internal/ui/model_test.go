@@ -991,6 +991,23 @@ func TestClearLogsRequiresConfirmationForFocusedAndPinnedPanels(t *testing.T) {
 	}
 }
 
+func TestLogTitleShowsColorCodedServiceStatus(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 100, 24, true
+
+	title := ansi.Strip(model.renderLogPanel(model.FocusedService(), 70, 10))
+	if !strings.Contains(title, "● api · stopped") {
+		t.Fatalf("stopped log title does not expose service state: %q", title)
+	}
+
+	model.FocusedService().SetStatus(config.StatusRunning)
+	title = ansi.Strip(model.renderLogPanel(model.FocusedService(), 70, 10))
+	if !strings.Contains(title, "● api · running") {
+		t.Fatalf("running log title does not expose service state: %q", title)
+	}
+}
+
 func TestTabCyclesPanelsAndIncludesPinnedLogs(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()

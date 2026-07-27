@@ -341,4 +341,16 @@ func TestLogRenderingUsesSeparateTimestampAndSourceRoles(t *testing.T) {
 			t.Errorf("%s role is missing from rendered log", name)
 		}
 	}
+	if reflect.DeepEqual(LogSourceStyle.GetForeground(), LogInfoStyle.GetForeground()) {
+		t.Fatal("ordinary log source is not visually quieter than its message")
+	}
+
+	systemLine := "[Kranz] Started · PID 42"
+	systemRendered := styleLogLine(systemLine)
+	if ansi.Strip(systemRendered) != systemLine {
+		t.Fatalf("styled system log changed its text: %q", ansi.Strip(systemRendered))
+	}
+	if prefix := terminalStylePrefix(LogSystemStyle); prefix == "" || !strings.Contains(systemRendered, prefix) {
+		t.Fatal("Kranz system log does not use the dedicated system style")
+	}
 }

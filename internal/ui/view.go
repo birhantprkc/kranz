@@ -1558,7 +1558,9 @@ func (m *Model) renderLogPanelMode(svc *service.Service, width, height int, pinn
 		return boundedPanel(panelStyle, contentWidth, contentHeight, []string{title, "", "Select a service"})
 	}
 
-	title := titlePrefix + ServiceNameStyle.Render(svc.Name)
+	visualState := m.serviceVisualState(svc)
+	title := titlePrefix + serviceStatusIndicator(visualState) + " " + ServiceNameStyle.Render(svc.Name) +
+		ContextBarStyle.Render(" · "+strings.ToLower(serviceStatusLabel(svc.Status(), visualState)))
 	if !followMode {
 		state := "BROWSING"
 		if logPaused {
@@ -1890,20 +1892,27 @@ func (m *Model) displayLogEntry(entry config.LogEntry) string {
 func styleLogLine(line string) string {
 	timestamp, message := splitLogTimestamp(line)
 	level := detectLogLevel(message)
-	var styled string
+	messageStyle := LogInfoStyle
 	switch level {
 	case config.LogError:
-		styled = LogErrorStyle.Render(message)
+		messageStyle = LogErrorStyle
 	case config.LogWarn:
-		styled = LogWarnStyle.Render(message)
+		messageStyle = LogWarnStyle
 	case config.LogDebug:
-		styled = LogDebugStyle.Render(message)
-	default:
-		source, remainder := splitLogSource(message)
-		styled = LogInfoStyle.Render(message)
-		if source != "" {
-			styled = LogSourceStyle.Render(source) + LogInfoStyle.Render(remainder)
+		messageStyle = LogDebugStyle
+	}
+
+	source, remainder := splitLogSource(message)
+	styled := messageStyle.Render(message)
+	if source != "" {
+		sourceStyle := LogSourceStyle
+		if strings.EqualFold(source, "[Kranz]") {
+			sourceStyle = LogSystemStyle
+			if level == config.LogInfo {
+				messageStyle = LogSystemStyle
+			}
 		}
+		styled = sourceStyle.Render(source) + messageStyle.Render(remainder)
 	}
 	if timestamp != "" {
 		return LogTimestampStyle.Render(timestamp) + styled

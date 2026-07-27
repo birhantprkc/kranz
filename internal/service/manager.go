@@ -225,6 +225,7 @@ func (m *Manager) startService(name string, recovery bool) error {
 	}
 
 	svc.SetStatus(config.StatusStarting)
+	svc.AppendLog("[Kranz] Starting")
 
 	pm := NewProcessManager(1000)
 
@@ -233,11 +234,13 @@ func (m *Manager) startService(name string, recovery bool) error {
 	if err != nil {
 		svc.SetDesiredRunning(false)
 		svc.SetStatus(config.StatusStopped)
+		svc.AppendLog("[Kranz] Start failed: " + err.Error())
 		return fmt.Errorf("start service %q: %w", name, err)
 	}
 
 	svc.SetPID(pid)
 	svc.SetStatus(config.StatusRunning)
+	svc.AppendLog(fmt.Sprintf("[Kranz] Started · PID %d", pid))
 	svc.ResetNewLogCount()
 
 	monitorStop := make(chan struct{})
@@ -272,6 +275,7 @@ func (m *Manager) StopService(name string) error {
 	}
 
 	svc.SetStatus(config.StatusStopping)
+	svc.AppendLog("[Kranz] Stopping")
 
 	if monitorStop != nil {
 		close(monitorStop)
@@ -300,6 +304,7 @@ func (m *Manager) StopService(name string) error {
 
 	svc.SetPID(0)
 	svc.SetStatus(config.StatusStopped)
+	svc.AppendLog("[Kranz] Stopped")
 	return stopErr
 }
 
@@ -882,9 +887,9 @@ func (m *Manager) monitorProcess(name string, svc *Service, pm *ProcessManager, 
 				svc.RecordExit(exitCode, waitErr)
 				shouldEvaluate = true
 				if m.successfulExit(svc.Config, exitCode) {
-					svc.AppendLog(fmt.Sprintf("[Kranz] Service %s completed with exit code %d", name, exitCode))
+					svc.AppendLog(fmt.Sprintf("[Kranz] Process exited · code %d", exitCode))
 				} else {
-					svc.AppendLog(fmt.Sprintf("[Kranz] Service %s failed with exit code %d", name, exitCode))
+					svc.AppendLog(fmt.Sprintf("[Kranz] Process failed · exit code %d", exitCode))
 				}
 			}
 			svc.lifecycleMu.Unlock()
@@ -922,7 +927,7 @@ func (m *Manager) handleNaturalExit(name string, svc *Service, exitCode int) {
 		if backoff <= 0 {
 			backoff = time.Second
 		}
-		svc.AppendLog(fmt.Sprintf("[Kranz] Restarting in %s (attempt %d)", backoff, attempt))
+		svc.AppendLog(fmt.Sprintf("[Kranz] Restart scheduled · attempt %d · in %s", attempt, backoff))
 		go func() {
 			timer := time.NewTimer(backoff)
 			defer timer.Stop()

@@ -197,6 +197,32 @@ func TestOnFailureRecoveryHonorsRestartLimit(t *testing.T) {
 	}
 }
 
+func TestStartAndStopAppendLifecycleBoundaries(t *testing.T) {
+	manager := NewManager(&config.Config{Project: "Test", Services: map[string]config.Service{
+		"api": {Command: "sleep 60"},
+	}})
+	defer manager.Shutdown()
+	if err := manager.StartService("api"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StopService("api"); err != nil {
+		t.Fatal(err)
+	}
+
+	api, _ := manager.GetService("api")
+	logs := strings.Join(api.Logs.Lines(), "\n")
+	for _, expected := range []string{
+		"[Kranz] Starting",
+		"[Kranz] Started · PID ",
+		"[Kranz] Stopping",
+		"[Kranz] Stopped",
+	} {
+		if !strings.Contains(logs, expected) {
+			t.Errorf("lifecycle logs do not contain %q:\n%s", expected, logs)
+		}
+	}
+}
+
 func TestApplyConfigPreservesUnchangedProcessesAndReconcilesChanges(t *testing.T) {
 	manager := NewManager(&config.Config{Project: "Test", Services: map[string]config.Service{
 		"stable":  {Command: "sleep 60"},
