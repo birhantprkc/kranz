@@ -1376,6 +1376,35 @@ func TestMouseWheelMovesThroughServices(t *testing.T) {
 	}
 }
 
+func TestMouseHoverAndWheelFocusLogPanel(t *testing.T) {
+	model := newTestModel()
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 100, 24, true
+	for index := range 40 {
+		model.FocusedService().AppendLog(fmt.Sprintf("line %d", index))
+	}
+	model.panelFocus = panelServices
+	serviceIndex := model.focused
+	rightX := model.dashboardLeftWidth() + 1
+
+	_, _ = model.handleMouseMsg(tea.MouseMsg{
+		X: rightX, Y: dashboardHeaderRows + 1, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone,
+	})
+	if model.panelFocus != panelLogs {
+		t.Fatalf("hover over logs focused panel %v, want logs", model.panelFocus)
+	}
+
+	_, _ = model.handleMouseMsg(tea.MouseMsg{
+		X: rightX, Y: dashboardHeaderRows + 1, Button: tea.MouseButtonWheelUp,
+	})
+	if model.panelFocus != panelLogs || model.logOffset == 0 || model.followMode {
+		t.Fatalf("wheel over logs focused panel %v at offset %d follow %v", model.panelFocus, model.logOffset, model.followMode)
+	}
+	if model.focused != serviceIndex {
+		t.Fatalf("wheel over logs moved service cursor from %d to %d", serviceIndex, model.focused)
+	}
+}
+
 func TestTagsPanelSelectsLifecycleTargets(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()

@@ -57,6 +57,7 @@ func (m *Model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleDashboardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	m.focusDashboardPanelAt(msg.X, msg.Y)
 	if model, command, handled := m.handleDashboardWheel(msg); handled {
 		return model, command
 	}
@@ -83,6 +84,24 @@ func (m *Model) handleDashboardMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	m.panelFocus = m.logPanelFocusAt(msg.Y)
 	return m, nil
+}
+
+func (m *Model) focusDashboardPanelAt(x, y int) {
+	if y < dashboardHeaderRows || y >= m.height-dashboardFooterRows {
+		return
+	}
+	if x >= 0 && x < m.dashboardLeftWidth() {
+		listHeight, _ := m.serviceColumnLayout(m.height - dashboardHeaderRows - dashboardFooterRows)
+		if y < dashboardHeaderRows+listHeight {
+			m.panelFocus = panelServices
+		} else {
+			m.panelFocus = panelDetails
+		}
+		return
+	}
+	if x >= m.dashboardLeftWidth() && x < m.width {
+		m.panelFocus = m.logPanelFocusAt(y)
+	}
 }
 
 func (m *Model) handleDashboardWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) {
