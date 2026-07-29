@@ -14,32 +14,128 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/kranz-org/kranz" alt="MIT license"></a>
 </p>
 
-Kranz (German for “wreath”) keeps a project’s local services, logs, health checks, and listening ports in one place. Its numbered panel navigation follows the same working model as lazygit: services and details on the left, with the focused service’s output on the right.
+Kranz runs and monitors long-running development services directly on the host.
+It keeps their state, dependencies, health checks, ports, and logs in one
+keyboard-first terminal interface, with numbered panel navigation in the style
+of lazygit.
+
+It is designed for projects with several local processes that have outgrown
+separate terminal tabs. It can be used alongside Docker Compose: keep
+infrastructure such as PostgreSQL, Redis, or ClickHouse in containers while
+running the applications you are actively developing through Kranz.
+
+Available for macOS and Linux on x86-64 and ARM64.
 
 <p align="center">
   <img src="docs/assets/kranz-demo.gif" alt="Kranz application demo">
 </p>
 
+## Where Kranz fits
+
+Use Kranz when you want to:
+
+- Start services in dependency order and wait for readiness
+- Inspect service state, health checks, ports, and logs in one place
+- Restart or stop individual services without losing the rest of the stack
+- Keep infrastructure containerized while running application code natively
+
+Kranz is not a container runtime or a deployment orchestrator. If a shell
+script, Justfile, or a few terminal tabs already cover your workflow, you
+probably do not need it.
+
+## Quick start
+
+Install Kranz with Homebrew:
+
+```bash
+brew install kranz-org/tap/kranz
+```
+
+Or with Go 1.24 or newer:
+
+```bash
+go install github.com/kranz-org/kranz/cmd/kranz@latest
+```
+
+Prebuilt archives and build-from-source instructions are under
+[Install](#install).
+
+Create `kranz.yaml`. The example below uses Python 3 as a stand-in web service:
+
+```yaml
+project: demo
+
+services:
+  web:
+    command: python3 -m http.server 8000
+    ports: [8000]
+    healthcheck:
+      readiness:
+        type: http
+        url: http://127.0.0.1:8000
+
+  worker:
+    command: sh -c 'while true; do date; sleep 2; done'
+    depends_on: [web]
+    dependency_conditions:
+      web:
+        condition: process_healthy
+```
+
+Run `kranz`, then press `a` followed by `s` to start both services. The worker
+will wait until the web service is ready.
+
+Already using Process Compose? Run `kranz` in a directory containing a
+supported `process-compose.yaml`; no separate Kranz configuration is required.
+
 ## Features
 
-- Centralized start, stop, restart, and shutdown
-- Five dependency conditions: started, healthy, completed, successful completion, and log-ready
-- Automatic recovery policies with backoff and restart limits
-- Ordered shutdown with custom commands, signals, timeouts, and process/parent targeting
-- Tag-based selection and grouped startup
-- Port conflict detection with Kranz/external ownership, PID, and process details
-- HTTP, TCP, and command health checks
-- Color-coded logs, optional capture timestamps, regex filter/highlight, wrapping, pause/follow mode, and unread counters
-- 19 contrast-oriented themes with independent theme, accent, and terminal-adaptive background sources
-- Complete mouse control for panels, selections, action bars, search, and modals
-- `Ctrl+O` command-shell handoff without stopping managed services
-- Safe compatibility mode for common `process-compose.yaml` projects
-- Automatic configuration hot reload with last-known-good fallback
-- Multiple merged configuration files plus `.env` and per-service `env_file` support
-- In-app notifications and operation status
-- Process-group cleanup on `q`, `Ctrl+C`, `SIGTERM`, `SIGHUP`, and TUI errors
+- **Dependency-aware startup** with five conditions: started, healthy,
+  completed, completed successfully, and log-ready
+- **Health checks** over HTTP, TCP, or a command, with separate readiness and
+  liveness probes
+- **Recovery policies** with backoff and restart limits
+- **Ordered shutdown** in reverse dependency order, with per-service commands,
+  signals, and timeouts
+- **Port conflict detection** that distinguishes a Kranz-owned listener from an
+  external process, with PID and process details
+- **Log inspection**: color-coded output, regex filter and highlight, wrapping,
+  pause/follow, and unread counters
+- **Tag-based selection** for starting or stopping a group as one target
+- **Process-group cleanup**: each service runs in its own process group and is
+  signalled as a group on `q`, `Ctrl+C`, `SIGTERM`, `SIGHUP`, and TUI errors,
+  escalating to `SIGKILL` after the timeout
+- **Configuration hot reload** with last-known-good fallback, across multiple
+  merged files, `.env`, and per-service `env_file`
+- **Process Compose compatibility** for a safe subset of existing
+  `process-compose.yaml` projects
+
+Interface details — 19 themes, full mouse support, `Ctrl+O` shell handoff, and
+in-app notifications — are described under [Controls](#controls).
+
+## How it relates to other tools
+
+- **Docker Compose** runs services in reproducible container environments.
+  Kranz manages ordinary processes on the host. They can be used together.
+- **Just and Make** work well for defining repeatable project commands and their
+  dependencies. Kranz is aimed at supervising long-running processes and keeping
+  their live state, health, ports, and logs visible.
+- **mprocs and similar TUI process runners** focus on running multiple commands
+  and organizing their output. Kranz emphasizes service lifecycle: dependency
+  conditions, health checks, recovery, ordered shutdown, and port ownership.
+- **Process Compose** is the closest alternative and a broader orchestration
+  platform, with server/client operation, an API, scaling, schedules, and
+  interactive processes. Choose Kranz when you want a foreground, session-scoped
+  tool where one terminal owns the local stack and gives you a focused view of
+  each service's state, health, ports, and logs. Choose Process Compose when you
+  need headless control, an API, scaling, schedules, or interactive processes.
+  Kranz can load a safe subset of existing `process-compose.yaml` configurations,
+  so supported projects can try it without maintaining a second configuration.
 
 ## Install
+
+Kranz supports macOS and Linux on both x86-64 and ARM64. There is no Windows
+build; port inspection and process-group handling rely on Unix APIs.
 
 ### Homebrew
 
@@ -149,12 +245,32 @@ For Process Compose projects, a matching `process-compose.override.yaml` or
 `process-compose.override.yml` is merged automatically when present. Explicit
 files are merged from left to right.
 
+Configuration and environment files are watched. Valid edits are reconciled
+automatically, while invalid edits leave the last known good runtime untouched.
+Press `Ctrl+L` to reload immediately.
+
+### Environment variables
+
 Kranz reads `.env` beside the first configuration file for variable expansion
-and process environment defaults. `defaults.env_files`, service `env_files`,
-and Process Compose `env_file`/`is_dotenv_disabled` entries are also supported. Direct service
-environment values have the highest precedence. Configuration and environment
-files are watched; valid edits are reconciled automatically, while invalid edits
-leave the last known good runtime untouched. Press `Ctrl+L` to reload immediately.
+and process environment defaults. `defaults.env_files`, service `env_files`, and
+Process Compose `env_file`/`is_dotenv_disabled` entries are also supported.
+
+Sources are merged per service, from lowest to highest precedence:
+
+1. `.env` beside the first configuration file
+2. `defaults.env`
+3. `defaults.env_files`, in the listed order
+4. Service `env_files`, in the listed order
+5. Service `env`
+
+Host environment references such as `$HOME` are expanded after all layers are
+merged.
+
+### Health checks
+
+`readiness` and `liveness` are independent optional blocks. Every configured
+block must declare its own `type` (`http`, `tcp`, or `command`); an empty
+`healthcheck` block is rejected.
 
 ### Process Compose compatibility
 
@@ -167,71 +283,199 @@ Kranz can load a useful, intentionally safe subset of Process Compose configurat
 - Project-level name, version, and environment
 - Multiple `-f` files, conventional override discovery, and live `Ctrl+L` reload
 
-Unsupported execution models are rejected instead of being silently misinterpreted: replicas above one, schedules, and daemon/TTY/interactive/foreground modes. Remote/headless control, scaling, scheduled jobs, elevated/interactive execution, and persistent file-log infrastructure remain intentionally outside this compatibility layer. Disabled processes stay visible and can be started manually. Configured Process Compose file logging is reported as ignored in the notification center.
+Unsupported execution models are rejected rather than silently misinterpreted:
+
+- Replicas above one
+- Schedules
+- Daemon, TTY, interactive, and foreground modes
+
+Remote and headless control, scaling, scheduled jobs, elevated execution, and
+persistent file-log infrastructure are intentionally outside this compatibility
+layer.
+
+Two behaviors are worth noting: disabled processes stay visible and can be
+started manually, and configured Process Compose file logging is reported as
+ignored in the notification center.
 
 ### Themes and user settings
 
 Built-in themes: `kranz`, `tokyo-night`, `dracula`, `nord`, `gruvbox-dark`, `catppuccin-mocha`, `rose-pine`, `solarized-dark`, `monokai`, `everforest`, `one-dark`, `github-dark`, `ocean`, `forest`, `amber`, `high-contrast`, `github-light`, `solarized-light`, and `cream`.
 
-Every built-in theme has a light and dark variant. `ui.color_mode` selects `auto` (the default), `dark`, or `light`. Auto detects the terminal background at startup, follows macOS and supported Linux system appearance changes, and checks independent terminal-profile changes whenever the terminal regains focus. `Ctrl+L` is only a manual fallback.
+Every built-in theme has a light and dark variant. `ui.color_mode` selects
+`auto` (the default), `dark`, or `light`. Auto detects the terminal background
+at startup, follows macOS and supported Linux system appearance changes, and
+re-checks the terminal profile whenever the terminal regains focus. Detection is
+automatic; `Ctrl+L` forces it immediately.
 
-Background ownership is independent from color mode. Set `ui.background` to `terminal` (the default) to leave the canvas unpainted so the terminal profile supplies its exact background. Use `theme` to paint the selected theme's current light or dark surface. For example, `theme: cream`, `background: theme`, and `color_mode: auto` paints warm cream in a light terminal and the theme's dark warm-brown variant in a dark terminal. Canvas and panel surfaces always share one base instead of producing a gray-outside/white-inside split.
+Background ownership is independent from color mode:
 
-Open the live theme picker with `Ctrl+T`. Arrow navigation previews a selected theme. `p` toggles between the project and selected theme, `a` toggles between the project and theme-default accent, `b` toggles terminal/theme background ownership, and `m` cycles Auto/Dark/Light. The four choices are independent, and the summary always shows exactly what will be saved.
+- `ui.background: terminal` (the default) leaves the canvas unpainted, so the
+  terminal profile supplies its exact background.
+- `ui.background: theme` paints the selected theme's current light or dark
+  surface.
 
-Press `Enter` to save globally as a personal user override. User settings are written atomically with user-only permissions to the platform configuration directory: `~/Library/Application Support/kranz/settings.yaml` on macOS and typically `~/.config/kranz/settings.yaml` on Linux. Press `c` to save the same appearance to the project's native Kranz YAML instead, making it the project default and clearing the matching global overrides. The picker shows both destination paths. With multiple `-f` layers, Kranz updates the last native configuration layer because it has the highest precedence. Process Compose files are never rewritten; use a native Kranz configuration layer when project theme persistence is required. `Esc` closes the picker without saving.
+For example, `theme: cream` with `background: theme` and `color_mode: auto`
+paints warm cream in a light terminal and the theme's dark warm-brown variant in
+a dark terminal. Canvas and panel surfaces always share one base instead of
+producing a gray-outside/white-inside split.
+
+Open the live theme picker with `Ctrl+T`. Arrow navigation previews a selected
+theme, and the summary always shows exactly what will be saved. Four independent
+toggles are available:
+
+| Key | Toggles |
+|---|---|
+| `p` | Project theme / selected theme |
+| `a` | Project accent / theme-default accent |
+| `b` | Terminal / theme background ownership |
+| `m` | Auto / Dark / Light |
+
+The picker saves to one of two destinations, and shows both paths:
+
+- **`Enter` — personal user override.** Written atomically with user-only
+  permissions to the platform configuration directory:
+  `~/Library/Application Support/kranz/settings.yaml` on macOS, typically
+  `~/.config/kranz/settings.yaml` on Linux.
+- **`c` — project default.** Written to the project's native Kranz YAML,
+  clearing the matching global overrides.
+
+`Esc` closes the picker without saving.
+
+With multiple `-f` layers, Kranz updates the last native configuration layer,
+because it has the highest precedence. Process Compose files are never
+rewritten, so project theme persistence requires a native Kranz configuration
+layer.
 
 ## Controls
 
-Visible controls are clickable in terminals with mouse support: panel titles, service/tag rows and checkboxes, the bottom action bar, search controls, modal actions, and the complete theme picker. The mouse wheel scrolls focused content and modal lists. Keyboard shortcuts remain the fastest path.
+Interactive elements are clickable in terminals with mouse support: panel
+titles, service and tag rows, checkboxes, the bottom action bar, search
+controls, modal actions, and the theme picker. The mouse wheel scrolls focused
+content and modal lists. Keyboard shortcuts remain the fastest path.
+
+**Navigation**
 
 | Key | Action |
 |---|---|
-| `1`, `2`, `3` | Focus Services/Tags, Details, or Logs; when the list is focused, `1` switches Services/Tags |
-| `Shift+3` | Pin/unpin the focused service logs above the active log panel |
+| `1`, `2`, `3` | Focus the Services/Tags, Details, or Logs panel |
+| `t`, `←` / `→`, or `1` again | Switch the first panel between Services and Tags |
 | `Tab` / `Shift+Tab` | Focus next/previous panel, including pinned logs when present |
 | `↑` / `↓`, `j` / `k` | Move or scroll inside the focused panel |
-| `←` / `→` | Cycle Services/Tags while the first panel is focused |
+| `Shift+3` (or `#`) | Pin/unpin the focused service logs above the active log panel |
+
+**Service lifecycle**
+
+| Key | Action |
+|---|---|
 | `Space` | Add/remove the focused service or tag from the selection |
 | `s` | Start targets with required dependencies, or stop targets and their dependents |
 | `Shift+S` | Start or stop only the selected/focused targets, ignoring dependency expansion |
 | `r` | Restart the selected service |
 | `a` | Select all services, or clear the full selection |
-| `A` | Stop all services |
-| `R` | Restart services that are currently running |
-| `t` | Switch the first panel between Services and Tags |
+| `Shift+A` | Stop all services |
+| `Shift+R` | Restart services that are currently running |
 | `Enter` in Tags | Expand or collapse services below the focused tag |
-| `T` | Clear the tag selection |
-| `h` | Show health-check history |
-| `n` | Open notifications |
-| `/` | Regex-filter focused logs; use `Tab` in the editor for highlight mode |
-| `n` / `N` | Jump to the next/previous match in highlight mode |
+| `Shift+T` | Clear the tag selection |
+
+**Logs and inspection**
+
+| Key | Action |
+|---|---|
+| `/` | Regex-filter focused logs; press `Tab` in the editor for highlight mode |
+| `n` / `Shift+N` | Jump to the next/previous match, in highlight mode with logs focused |
 | `w` | Toggle wrapping for long log lines |
 | `i` | Show or hide the time each log line was captured |
 | `f` | Pause or resume log following |
 | `c` | Clear focused or pinned service logs after confirmation |
-| `q` | Quit, stopping all managed processes first |
-| `Ctrl+C` | Immediately stop all managed processes and quit |
-| `Ctrl+T` | Preview themes and save them to user settings or the project config |
-| `p` / `a` / `b` / `m` in Themes | Toggle theme, accent, background ownership, or Auto/Dark/Light mode |
-| `Enter` / `c` in Themes | Save globally / save to the project config |
+| `h` | Show health-check history |
+| `n` | Open notifications, unless highlight-mode search is active |
+
+**Application**
+
+| Key | Action |
+|---|---|
+| `Ctrl+T` | Open the theme picker (see [Themes and user settings](#themes-and-user-settings)) |
 | `Ctrl+L` | Reload configuration and detect the terminal appearance immediately |
 | `Ctrl+O` | Open a command shell; press `Ctrl+O` again to return to Kranz |
 | `?` | Open help |
+| `q` | Quit, stopping all managed processes first |
+| `Ctrl+C` | Immediately stop all managed processes and quit |
 
-When no services or tags are checked, `s` targets the focused row. Selected tags expand to all matching services, so a tag such as `frontend` can be started or stopped as one target. In the Tags panel, `Enter` expands matching services inline; those child rows can be focused and selected like regular services, and a second `Enter` on the tag collapses them. Starting includes required dependencies. Stopping includes every transitive dependent and processes them in reverse dependency order, so stopping a backend first stops the frontends and workers that require it. Unrelated services remain running. A service waiting for its dependency gate is shown with a yellow dot and an explicit `queued` label; Details names the dependencies it is waiting for. Once all targets are active or queued, the next `s` cancels/stops them—even while readiness is still pending. Enter never controls service lifecycle.
+### Selection and targeting
 
-`Shift+S` is an explicit dependency override in both directions. For stopped targets it starts exactly the selected services, or the focused service when nothing is selected, without starting or waiting for dependencies. For running targets it stops exactly those targets without stopping their dependents. Port-conflict and process-ownership safety checks remain enabled.
+When no services or tags are checked, `s` targets the focused row. Selected tags
+expand to all matching services, so a tag such as `frontend` can be started or
+stopped as one target. In the Tags panel, `Enter` expands matching services
+inline; those child rows can be focused and selected like regular services, and
+a second `Enter` on the tag collapses them. `Enter` only expands tags — it never
+starts or stops services.
 
-For a full batch, press `a`, then `s`: stopped services are started, while an entirely active selection is stopped. Press `a` again to clear the selection. Uppercase `A` remains the immediate stop-all shortcut.
+Dependency handling differs by direction:
 
-When a configured port is busy, Kranz distinguishes a listener owned by another managed service from an external process. An external conflict offers `k` to stop that exact PID and retry. Before sending a signal, Kranz scans the port again and refuses the action if the PID changed or became Kranz-owned. It tries `SIGTERM` first and only escalates after a grace period.
+- **Starting** includes required dependencies.
+- **Stopping** includes every transitive dependent, in reverse dependency order,
+  so stopping a backend first stops the frontends and workers that require it.
+  Unrelated services keep running.
 
-The Details panel below the compact service list shows readiness and liveness separately, with each check target on its own line, plus ports, tags, typed dependencies, recovery state, restart count and limit, last start, uptime, last exit, shutdown behavior, environment files, working directory, command, and PID. Active listeners include the detected protocol and bind address (for example, `tcp://127.0.0.1:3801`) when the operating system exposes them. Focus panel `2` and use arrows to scroll when its content exceeds the available height.
+A service waiting for its dependency gate is shown with a yellow dot and an
+explicit `queued` label, and Details names the dependencies it is waiting for.
+Once all targets are active or queued, the next `s` stops them, even while
+readiness is still pending.
 
-Each log title includes a color-coded service-state dot and readable status. Kranz inserts visually distinct `[Kranz]` lifecycle boundaries for process starts, stops, exits, and recovery attempts. Ordinary process output uses the theme's neutral text color, while source prefixes and debug output are muted. Log search compiles the entered text as a regular expression and applies it only to the focused service’s bounded in-memory log buffer. Filter mode is the default and hides non-matching rows while continuing to follow new matching output. Press `Tab` in the regex editor to select Highlight mode, which keeps every row visible and supports `n`/`N` navigation. Optional timestamps are capture metadata and never become part of the searchable text. Child-process terminal control sequences are stripped before rendering so a service cannot clear or reposition the Kranz interface. It does not search log files on disk.
+`Shift+S` is an explicit dependency override in both directions. For stopped
+targets it starts exactly the selected services — or the focused service when
+nothing is selected — without starting or waiting for dependencies. For running
+targets it stops exactly those targets without stopping their dependents.
+Port-conflict and process-ownership safety checks remain enabled.
 
-`readiness` and `liveness` are independent optional blocks. Every configured block must declare its own `type` (`http`, `tcp`, or `command`); an empty `healthcheck` block is rejected.
+For a full batch, press `a`, then `s`: stopped services are started, while an
+entirely active selection is stopped. Press `a` again to clear the selection.
+`Shift+A` remains the immediate stop-all shortcut.
+
+### Port conflicts
+
+When a configured port is busy, Kranz distinguishes a listener owned by another
+managed service from an external process. An external conflict offers `k` to
+stop that exact PID and retry.
+
+Before sending a signal, Kranz scans the port again and refuses the action if the
+PID changed or became Kranz-owned. It tries `SIGTERM` first and only escalates
+after a grace period.
+
+### Details panel
+
+The Details panel below the compact service list reports:
+
+- Readiness and liveness separately, with each check target on its own line
+- Ports, tags, and typed dependencies
+- Recovery state, restart count and limit
+- Last start, uptime, and last exit
+- Shutdown behavior, environment files, working directory, command, and PID
+
+Active listeners include the detected protocol and bind address (for example,
+`tcp://127.0.0.1:3801`) when the operating system exposes them. Focus panel `2`
+and use arrows to scroll when the content exceeds the available height.
+
+### Logs and search
+
+Each log title includes a color-coded service-state dot and readable status.
+Kranz inserts visually distinct `[Kranz]` lifecycle boundaries for process
+starts, stops, exits, and recovery attempts. Ordinary process output uses the
+theme's neutral text color, while source prefixes and debug output are muted.
+Child-process terminal control sequences are stripped before rendering, so a
+service cannot clear or reposition the Kranz interface.
+
+Search compiles the entered text as a regular expression and applies it only to
+the focused service's bounded in-memory log buffer — never to log files on disk.
+Two modes are available:
+
+- **Filter** (the default) hides non-matching rows while continuing to follow new
+  matching output.
+- **Highlight**, selected with `Tab` in the regex editor, keeps every row visible
+  and supports `n` / `Shift+N` navigation.
+
+Optional timestamps are capture metadata and never become part of the searchable
+text.
 
 ## Development
 
@@ -243,7 +487,7 @@ make test     # Run tests with the race detector and coverage
 make verify   # Format-check, vet, test, and build
 make lint     # Run golangci-lint
 make run      # Build and run
-make install  # Install into GOPATH/bin
+make install  # Install into GOBIN or GOPATH/bin
 make snapshot # Build local Darwin/Linux release archives
 make clean    # Remove build output
 ```
