@@ -8,7 +8,7 @@ workflow; no release commit or generated binary is checked into the repository.
 
 1. Confirm that the public `kranz-org/kranz` repository uses `main` as its
    default branch and contains only reviewed release-ready history.
-2. Make `main` the default branch. Require the `Go (ubuntu-latest)` and
+2. Make `main` the default branch. Require the `Lint`, `Go (ubuntu-latest)`, and
    `Go (macos-latest)` checks before merging, require pull requests, and prevent
    force pushes and branch deletion.
 3. Enable private vulnerability reporting, Dependabot security updates, secret
@@ -40,6 +40,7 @@ workflow; no release commit or generated binary is checked into the repository.
 
    ```bash
    make verify
+   make lint
    make release-check
    make snapshot
    ./dist/kranz_darwin_arm64_v8.0/kranz --version # choose the local platform build
@@ -48,9 +49,9 @@ workflow; no release commit or generated binary is checked into the repository.
 4. Create an annotated tag without pushing it automatically:
 
    ```bash
-   make tag RELEASE_VERSION=0.1.0
-   git show v0.1.0
-   git push origin v0.1.0
+   make tag RELEASE_VERSION=0.4.0
+   git show v0.4.0
+   git push origin v0.4.0
    ```
 
 ## Verify the published release
@@ -59,8 +60,8 @@ The workflow must publish four Darwin/Linux archives, `checksums.txt`, and
 `kranz.rb`. Verify the release before announcing it:
 
 ```bash
-gh release view v0.1.0
-gh release download v0.1.0 --pattern 'checksums.txt' --pattern '*.tar.gz'
+gh release view v0.4.0
+gh release download v0.4.0 --pattern 'checksums.txt' --pattern '*.tar.gz'
 shasum -a 256 -c checksums.txt
 ```
 
@@ -68,8 +69,8 @@ When the optional tap automation is configured, validate the formula in its
 real tap context and install it on a clean machine:
 
 ```bash
-brew audit --strict --new --online kranz-org/tap/kranz
-brew install --build-from-source kranz-org/tap/kranz
+brew audit --strict --online kranz-org/tap/kranz
+brew install kranz-org/tap/kranz
 brew test kranz-org/tap/kranz
 ```
 
