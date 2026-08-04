@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kranz-org/kranz/internal/config"
+	"github.com/kranz-org/kranz/internal/health"
 	"github.com/kranz-org/kranz/internal/service"
 )
 
@@ -170,8 +171,10 @@ func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []str
 		lines = append(lines, detailListItemsLines("TAGS", svc.Config.Tags, ", ", contentWidth)...)
 	}
 	lines = append(lines, dependencyDetailLines(svc, contentWidth)...)
-	lines = append(lines, m.healthDetailLines("READINESS", healthReadiness(svc), m.readinessSummary(svc), contentWidth)...)
-	lines = append(lines, m.healthDetailLines("LIVENESS", healthLiveness(svc), m.livenessSummary(svc), contentWidth)...)
+	detectedPorts := svc.DetectedPorts()
+	serviceActive := svc.Status() != config.StatusStopped
+	lines = append(lines, m.healthDetailLines("READINESS", healthReadiness(svc), m.readinessSummary(svc), detectedPorts, serviceActive, contentWidth)...)
+	lines = append(lines, m.healthDetailLines("LIVENESS", healthLiveness(svc), m.livenessSummary(svc), detectedPorts, serviceActive, contentWidth)...)
 	if svc.Config.ReadyLogLine != "" {
 		lines = append(lines, detailFieldLines("READY LOG", svc.Config.ReadyLogLine, contentWidth)...)
 	}
@@ -317,10 +320,10 @@ func detailListItemsLines(label string, parts []string, separator string, conten
 	return detailSectionLines(label, parts, contentWidth)
 }
 
-func (m *Model) healthDetailLines(label string, check *config.CheckConfig, status string, contentWidth int) []string {
+func (m *Model) healthDetailLines(label string, check *config.CheckConfig, status string, detectedPorts []int, serviceActive bool, contentWidth int) []string {
 	lines := detailFieldLines(label, status, contentWidth)
 	if check != nil {
-		lines = append(lines, detailArrowValueLines(checkDescription(check), contentWidth)...)
+		lines = append(lines, detailArrowValueLines(checkDescription(check, detectedPorts, serviceActive), contentWidth)...)
 	}
 	return lines
 }
@@ -358,33 +361,105 @@ func (m *Model) scrollDetails(direction int) {
 }
 
 func (m *Model) renderPortDetailLines(svc *service.Service, contentWidth int) []string {
-	if len(svc.Config.Ports) == 0 {
+	entries := mergePortDetailEntries(svc.Config.Ports, svc.DetectedPorts())
+	if len(entries) == 0 {
+		if !svc.Config.PortDiscoveryEnabled() {
+			return []string{DetailLabelStyle.Render("PORTS") + " " + ContextBarStyle.Render("detection off")}
+		}
 		return []string{DetailLabelStyle.Render("PORTS") + " " + detailValue("—")}
 	}
 
-	lines := make([]string, 0, len(svc.Config.Ports))
-	for index, portNumber := range svc.Config.Ports {
+	portWidth := portDetailNumberWidth(entries)
+	lines := make([]string, 0, len(entries))
+	for index, entry := range entries {
 		label := "     "
 		if index == 0 {
 			label = "PORTS"
 		}
-		lines = append(lines, m.renderPortDetail(svc, portNumber, label, contentWidth)...)
+		if entry.detected {
+			lines = append(lines, renderDetectedPortDetail(entry, label, portWidth, contentWidth)...)
+			continue
+		}
+		lines = append(lines, m.renderPortDetail(svc, entry.port, label, portWidth, contentWidth)...)
 	}
 	return lines
 }
 
-func (m *Model) renderPortDetail(svc *service.Service, portNumber int, label string, contentWidth int) []string {
-	prefix := DetailLabelStyle.Render(label) + " " + PortStyle.Render(fmt.Sprintf("%d", portNumber)) + " "
+type portDetailEntry struct {
+	port       int
+	configured bool
+	detected   bool
+}
+
+func portDetailNumberWidth(entries []portDetailEntry) int {
+	width := 1
+	for _, entry := range entries {
+		width = max(width, len(strconv.Itoa(entry.port)))
+	}
+	return width
+}
+
+func mergePortDetailEntries(configured, detected []int) []portDetailEntry {
+	if len(configured) == 0 && len(detected) == 0 {
+		return nil
+	}
+	entries := make([]portDetailEntry, 0, len(configured)+len(detected))
+	indices := make(map[int]int, len(configured)+len(detected))
+	for _, portNumber := range configured {
+		if _, exists := indices[portNumber]; exists {
+			continue
+		}
+		indices[portNumber] = len(entries)
+		entries = append(entries, portDetailEntry{port: portNumber, configured: true})
+	}
+	for _, portNumber := range detected {
+		if index, exists := indices[portNumber]; exists {
+			entries[index].detected = true
+			continue
+		}
+		indices[portNumber] = len(entries)
+		entries = append(entries, portDetailEntry{port: portNumber, detected: true})
+	}
+	return entries
+}
+
+func renderDetectedPortDetail(entry portDetailEntry, label string, portWidth, contentWidth int) []string {
+	role := "detected"
+	if entry.configured {
+		role = "declared"
+	}
+	base := DetailLabelStyle.Render(label) + " " + PortStyle.Render(fmt.Sprintf("%*d", portWidth, entry.port)) + " "
+	return renderPortStatus(base, role, RunningBadgeStyle.Render("listening"), contentWidth)
+}
+
+func (m *Model) renderPortDetail(svc *service.Service, portNumber int, label string, portWidth, contentWidth int) []string {
+	base := DetailLabelStyle.Render(label) + " " + PortStyle.Render(fmt.Sprintf("%*d", portWidth, portNumber)) + " "
 	if m.portService != svc.Name || (m.portScanBusy && m.portChecked.IsZero()) {
-		return []string{prefix + StartingBadgeStyle.Render("checking…")}
+		return renderPortStatus(base, "declared", StartingBadgeStyle.Render("checking…"), contentWidth)
 	}
 	if m.portError != nil {
-		return []string{prefix + FailedBadgeStyle.Render("unavailable")}
+		return renderPortStatus(base, "declared", FailedBadgeStyle.Render("unavailable"), contentWidth)
 	}
 	if info := m.portDetails[portNumber]; info != nil {
-		return renderListeningPort(prefix, info, m.manager.ManagedServiceForPID(info.PID), contentWidth)
+		prefix := base + ContextBarStyle.Render("declared · ")
+		if lipgloss.Width(prefix+"listening") <= contentWidth {
+			return renderListeningPort(prefix, info, m.manager.ManagedServiceForPID(info.PID), contentWidth)
+		}
+		lines := []string{base + ContextBarStyle.Render("declared")}
+		return append(lines, renderListeningPort(ContextBarStyle.Render("  ↳ "), info, m.manager.ManagedServiceForPID(info.PID), contentWidth)...)
 	}
-	return []string{prefix + StoppedBadgeStyle.Render("free")}
+	return renderPortStatus(base, "declared", StoppedBadgeStyle.Render("free"), contentWidth)
+}
+
+func renderPortStatus(base, role, status string, contentWidth int) []string {
+	inline := base + ContextBarStyle.Render(role+" · ") + status
+	if lipgloss.Width(inline) <= contentWidth {
+		return []string{inline}
+	}
+	return []string{
+		base + ContextBarStyle.Render(role),
+		ContextBarStyle.Render("  ↳ ") + status,
+	}
 }
 
 func renderListeningPort(prefix string, info *config.PortInfo, managedService string, contentWidth int) []string {
@@ -553,17 +628,78 @@ func (m *Model) livenessSummary(svc *service.Service) string {
 	return FailedBadgeStyle.Render("failed")
 }
 
-func checkDescription(check *config.CheckConfig) string {
+func checkDescription(check *config.CheckConfig, detectedPorts []int, serviceActive bool) string {
+	resolved, err := health.ResolveCheckTarget(check, detectedPorts)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "waiting for") {
+			return detectingCheckDescription(check, serviceActive)
+		}
+		return FailedBadgeStyle.Render(err.Error())
+	}
+
+	switch resolved.Type {
+	case config.CheckHTTP:
+		if check.UsesDetectedPort() {
+			return highlightEndpointPort(resolved.URL, resolved.Port)
+		}
+		return resolved.URL
+	case config.CheckTCP:
+		if check.UsesDetectedPort() {
+			return "tcp://localhost:" + PortStyle.Render(strconv.Itoa(resolved.Port))
+		}
+		return fmt.Sprintf("tcp://localhost:%d", resolved.Port)
+	case config.CheckCommand:
+		return "$ " + resolved.Command
+	default:
+		return string(resolved.Type)
+	}
+}
+
+func detectingCheckDescription(check *config.CheckConfig, serviceActive bool) string {
+	marker := ContextBarStyle.Render("[DETECTING]")
+	if serviceActive {
+		marker = StartingBadgeStyle.Render("[DETECTING]")
+	}
 	switch check.Type {
 	case config.CheckHTTP:
-		return check.URL
+		return insertEndpointPort(check.URL, marker)
 	case config.CheckTCP:
-		return fmt.Sprintf("tcp://localhost:%d", check.Port)
-	case config.CheckCommand:
-		return "$ " + check.Command
+		return "tcp://localhost:" + marker
 	default:
-		return string(check.Type)
+		return marker
 	}
+}
+
+func insertEndpointPort(endpoint, renderedPort string) string {
+	schemeEnd := strings.Index(endpoint, "://")
+	if schemeEnd < 0 {
+		return endpoint
+	}
+	authorityStart := schemeEnd + len("://")
+	authorityEnd := len(endpoint)
+	if offset := strings.IndexAny(endpoint[authorityStart:], "/?#"); offset >= 0 {
+		authorityEnd = authorityStart + offset
+	}
+	return endpoint[:authorityEnd] + ":" + renderedPort + endpoint[authorityEnd:]
+}
+
+func highlightEndpointPort(endpoint string, port int) string {
+	schemeEnd := strings.Index(endpoint, "://")
+	if schemeEnd < 0 {
+		return endpoint
+	}
+	authorityStart := schemeEnd + len("://")
+	authorityEnd := len(endpoint)
+	if offset := strings.IndexAny(endpoint[authorityStart:], "/?#"); offset >= 0 {
+		authorityEnd = authorityStart + offset
+	}
+	portText := strconv.Itoa(port)
+	relativePortStart := strings.LastIndex(endpoint[authorityStart:authorityEnd], ":"+portText)
+	if relativePortStart < 0 {
+		return endpoint
+	}
+	portStart := authorityStart + relativePortStart + 1
+	return endpoint[:portStart] + PortStyle.Render(portText) + endpoint[portStart+len(portText):]
 }
 
 func detailValue(value string) string {

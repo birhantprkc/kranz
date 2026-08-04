@@ -104,7 +104,7 @@ func applyPalette(theme Theme) {
 	ServiceStartingStyle = lipgloss.NewStyle().Foreground(ColorYellow)
 	ServiceUnhealthyStyle = lipgloss.NewStyle().Foreground(ColorRed)
 	ServiceNameStyle = lipgloss.NewStyle().Foreground(ColorGrey).Bold(true)
-	PortStyle = lipgloss.NewStyle().Foreground(ColorData)
+	PortStyle = lipgloss.NewStyle().Foreground(ColorInfo)
 	TagStyle = lipgloss.NewStyle().Foreground(ColorDim)
 	PortWarningStyle = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
 	LogErrorStyle = lipgloss.NewStyle().Foreground(ColorRed)

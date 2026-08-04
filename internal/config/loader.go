@@ -189,6 +189,10 @@ func mergeService(base, override Service, mergeDependencies bool) Service {
 	if len(override.Ports) > 0 {
 		base.Ports = append([]int(nil), override.Ports...)
 	}
+	if override.DetectPorts != nil {
+		value := *override.DetectPorts
+		base.DetectPorts = &value
+	}
 	if len(override.Tags) > 0 {
 		base.Tags = append([]string(nil), override.Tags...)
 	}

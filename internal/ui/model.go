@@ -246,6 +246,7 @@ func NewModelWithOptions(cfg *config.Config, version string, options ModelOption
 	portChecker := port.NewChecker()
 	manager.SetHealthChecker(healthChecker)
 	manager.SetPortChecker(portChecker)
+	manager.SetListenerScanner(port.NewListenerScanner())
 	services := manager.Services()
 
 	model := &Model{

@@ -163,13 +163,15 @@ func (m *Model) renderHealthHistoryView() string {
 	lines = append(lines, "")
 
 	if svc.Config.HealthCheck != nil {
+		detectedPorts := svc.DetectedPorts()
+		serviceActive := svc.Status() != config.StatusStopped
 		lines = append(lines, "  Readiness: "+m.readinessSummary(svc))
 		if check := healthReadiness(svc); check != nil {
-			lines = append(lines, checkDescription(check))
+			lines = append(lines, checkDescription(check, detectedPorts, serviceActive))
 		}
 		lines = append(lines, "  Liveness:  "+m.livenessSummary(svc))
 		if check := healthLiveness(svc); check != nil {
-			lines = append(lines, checkDescription(check))
+			lines = append(lines, checkDescription(check, detectedPorts, serviceActive))
 		}
 		if healthData != nil {
 			lines = append(lines, "")

@@ -226,6 +226,21 @@ func TestThemeStylesPanelTitlesAsSurfaceLabels(t *testing.T) {
 	}
 }
 
+func TestPortStyleUsesInfoColor(t *testing.T) {
+	restoreDefaultTheme(t)
+	theme, err := ApplyTheme("nord", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := PortStyle.GetForeground(), lipgloss.Color(theme.Info); !reflect.DeepEqual(got, want) {
+		t.Fatalf("port color = %#v, want info color %#v", got, want)
+	}
+	if reflect.DeepEqual(PortStyle.GetForeground(), lipgloss.Color(theme.Data)) {
+		t.Fatal("port color still uses the data/warning palette role")
+	}
+}
+
 func TestPanelTitlesFillWidthAndRestoreSurfaceAfterNestedStyles(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)

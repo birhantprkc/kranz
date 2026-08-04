@@ -103,6 +103,8 @@ entry as a service, runs it from the Procfile directory, and reads the adjacent
   signals, and timeouts
 - **Port conflict detection** that distinguishes a Kranz-owned listener from an
   external process, with PID and process details
+- **Runtime port discovery** for TCP listeners opened by a service or any child
+  in its process group, even when no ports are configured
 - **Log inspection**: color-coded output, regex filter and highlight, wrapping,
   pause/follow, and unread counters
 - **Tag-based selection** for starting or stopping a group as one target
@@ -209,6 +211,10 @@ same `.env` key. Both files are watched and valid edits hot-reload. Kranz never
 rewrites a Procfile, including when project appearance is saved. On stop, Kranz
 sends `SIGTERM` to the service process group, allows 30 seconds for graceful
 shutdown, and then uses `SIGKILL` if processes remain.
+
+Procfile services do not need a `ports` declaration. After a service starts,
+Kranz discovers TCP listeners opened by its command or child processes and
+shows them as detected ports in Details.
 
 Select services with `a`, start them with `s`, and quit with `q`.
 
@@ -488,19 +494,119 @@ Before sending a signal, Kranz scans the port again and refuses the action if th
 PID changed or became Kranz-owned. It tries `SIGTERM` first and only escalates
 after a grace period.
 
+### Runtime port discovery
+
+Kranz can refresh the TCP listeners opened by each running service and its child
+processes. `detect_ports` is an optional service-level boolean. When omitted,
+discovery defaults on for a service without `ports` and defaults off when
+configured port hints are already present. The configured numbers are checked
+before start for conflicts regardless of discovery.
+
+- Without `ports`, Details automatically shows detected runtime listeners.
+- With `ports`, omit `detect_ports` to use configured/preflight information only.
+- Set `detect_ports: true` to show runtime listeners alongside configured hints;
+  a number present in both sets appears once as `declared · listening`, because
+  the listening state already confirms that Kranz detected it.
+- Set `detect_ports: false` to disable discovery explicitly; without configured
+  hints Details shows `PORTS detection off`.
+
+Details labels configured hints as `declared` and runtime-only listeners as
+`detected`. These equal-width roles and right-aligned port numbers keep a
+multi-port list visually aligned even when the numbers have different lengths.
+
+```yaml
+services:
+  web:
+    command: npm run dev
+    detect_ports: false
+```
+
+Discovery uses one `lsof -nP -iTCP -sTCP:LISTEN -Fpcn` snapshot on macOS and one
+`ss -H -ltnp` snapshot on Linux. The command must be installed and the current
+user must be allowed to see process ownership. Containers, hardened `/proc`
+mounts, and host permission policies can hide another process's PID. If the
+inspection command is missing or denied, service startup and lifecycle controls
+continue normally; configured ports remain available, while detected ports stay
+empty until a later snapshot succeeds. Discovery never writes ports back to a
+configuration file.
+
+Health checks can follow a port that is chosen only after process startup. Omit
+`port` from a TCP probe or omit the port from an HTTP URL; when service port
+discovery is enabled, either form selects a detected runtime listener:
+
+```yaml
+services:
+  frontend:
+    command: npm run dev
+    healthcheck:
+      readiness:
+        type: tcp
+
+  api:
+    command: ./api --port 0
+    healthcheck:
+      readiness:
+        type: http
+        url: http://127.0.0.1/ready
+```
+
+With exactly one detected listener, Kranz inserts that port before every probe.
+With no listener yet, the probe fails normally and retries at its configured
+interval. If the process opens multiple listeners, Kranz does not guess: select
+a zero-based position in the sorted detected-port list explicitly:
+
+```yaml
+healthcheck:
+  readiness:
+    type: tcp
+    detected_port_index: 0
+  liveness:
+    type: tcp
+    detected_port_index: 1
+```
+
+The longer `port_from: detected` form remains valid for TCP and HTTP
+compatibility, but is not required. `detected_port_index` alone is enough when
+a service opens multiple listeners.
+
+`port` and `port_from` cannot be combined. Dynamic ports require discovery to be
+enabled; a TCP probe without `port` and an HTTP URL without an explicit port are
+therefore invalid when `detect_ports: false`. To probe the conventional static
+HTTP/HTTPS port, write `:80` or `:443` explicitly in the URL. Every HTTP probe
+requires an absolute `http` or `https` URL with a host. Kranz changes only the
+URL port before each dynamic attempt and preserves its host, path, and query
+parameters.
+
+Before applying `detected_port_index`, Kranz sorts the detected ports, removes
+duplicates, and discards values outside 1–65535. The index is positional: if a
+service starts opening another lower-numbered listener, existing indexes can
+shift. Prefer omitting the index for a single-listener service; use a static
+port when the endpoint identity must remain stable independently of other
+listeners.
+
+Details and the health-history view show the resolved TCP or HTTP endpoint, not
+the selector syntax. Only a port inserted from runtime discovery is highlighted;
+a static port that was already part of the configured target remains ordinary
+text. Before the first listener is detected, Kranz keeps the target recognizable
+by rendering the unresolved slot in place, for example
+`http://localhost:[DETECTING]/health` or `tcp://localhost:[DETECTING]`. Once a
+snapshot arrives, `[DETECTING]` is replaced by the highlighted number. An
+ambiguous detected set remains an explicit error instead of being guessed.
+
 ### Details panel
 
 The Details panel below the compact service list reports:
 
 - Readiness and liveness separately, with each check target on its own line
-- Ports, tags, and typed dependencies
+- Configured and detected runtime ports, tags, and typed dependencies
 - Recovery state, restart count and limit
 - Last start, uptime, and last exit
 - Shutdown behavior, environment files, working directory, command, and PID
 
-Active listeners include the detected protocol and bind address (for example,
-`tcp://127.0.0.1:3801`) when the operating system exposes them. Focus panel `2`
-and use arrows to scroll when the content exceeds the available height.
+Configured-port inspection includes protocol, bind address, and process owner
+when the operating system exposes them. Runtime listeners are labeled
+`detected`, independently of whether a port was declared. Focus panel `2` and
+use arrows to scroll when the content exceeds the available height.
 
 ### Logs and search
 

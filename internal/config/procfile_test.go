@@ -38,6 +38,9 @@ func TestLoadProcfileUsesCommonConfigPipeline(t *testing.T) {
 	if shutdown := cfg.Services["web"].Shutdown; shutdown.Signal != 15 || shutdown.Timeout != 30*time.Second || shutdown.ParentOnly {
 		t.Errorf("Procfile shutdown default = %#v", shutdown)
 	}
+	if !cfg.Services["web"].PortDiscoveryEnabled() {
+		t.Error("Procfile service without ports did not enable runtime discovery")
+	}
 	if !reflect.DeepEqual(cfg.ServiceNames(), []string{"worker", "web"}) {
 		t.Errorf("ServiceNames() = %v", cfg.ServiceNames())
 	}
