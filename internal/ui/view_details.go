@@ -29,12 +29,11 @@ func (m *Model) renderServiceDetails(svc *service.Service, width, height int) st
 	contentWidth := max(1, width-2)
 	contentHeight := max(1, height-2)
 	if svc == nil {
-		title := renderPanelTitle("[2] DETAILS", contentWidth)
-		return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(title + "\n\nNo service selected")
+		return renderTitledPanel(m.panelStyle(panelDetails), m.panelTitleStyle(panelDetails), contentWidth, contentHeight, "[2] DETAILS", []string{"", "No service selected"})
 	}
 
 	lines := m.serviceDetailLines(svc, contentWidth)
-	viewportHeight := max(1, contentHeight-1)
+	viewportHeight := contentHeight
 	maxOffset := max(0, len(lines)-viewportHeight)
 	offset := min(m.detailOffset, maxOffset)
 	end := min(len(lines), offset+viewportHeight)
@@ -42,23 +41,22 @@ func (m *Model) renderServiceDetails(svc *service.Service, width, height int) st
 	if maxOffset > 0 {
 		title += ContextBarStyle.Render(fmt.Sprintf(" │ %d–%d/%d · ↑/↓", offset+1, end, len(lines)))
 	}
-	visible := append([]string{renderPanelTitle(title, contentWidth)}, lines[offset:end]...)
+	visible := append([]string(nil), lines[offset:end]...)
 	for i := range visible {
 		visible[i] = ansi.Truncate(visible[i], contentWidth, "…")
 	}
-	return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(strings.Join(visible, "\n"))
+	return renderTitledPanel(m.panelStyle(panelDetails), m.panelTitleStyle(panelDetails), contentWidth, contentHeight, title, visible)
 }
 
 func (m *Model) renderTagDetails(tag string, width, height int) string {
 	contentWidth := max(1, width-2)
 	contentHeight := max(1, height-2)
 	if tag == "" {
-		title := renderPanelTitle("[2] TAG DETAILS", contentWidth)
-		return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(title + "\n\nNo tag selected")
+		return renderTitledPanel(m.panelStyle(panelDetails), m.panelTitleStyle(panelDetails), contentWidth, contentHeight, "[2] TAG DETAILS", []string{"", "No tag selected"})
 	}
 
 	lines := m.tagDetailLines(tag, contentWidth)
-	viewportHeight := max(1, contentHeight-1)
+	viewportHeight := contentHeight
 	maxOffset := max(0, len(lines)-viewportHeight)
 	offset := min(m.detailOffset, maxOffset)
 	end := min(len(lines), offset+viewportHeight)
@@ -66,11 +64,11 @@ func (m *Model) renderTagDetails(tag string, width, height int) string {
 	if maxOffset > 0 {
 		title += ContextBarStyle.Render(fmt.Sprintf(" │ %d–%d/%d · ↑/↓", offset+1, end, len(lines)))
 	}
-	visible := append([]string{renderPanelTitle(title, contentWidth)}, lines[offset:end]...)
+	visible := append([]string(nil), lines[offset:end]...)
 	for index := range visible {
 		visible[index] = ansi.Truncate(visible[index], contentWidth, "…")
 	}
-	return m.panelStyle(panelDetails).Width(contentWidth).Height(contentHeight).Render(strings.Join(visible, "\n"))
+	return renderTitledPanel(m.panelStyle(panelDetails), m.panelTitleStyle(panelDetails), contentWidth, contentHeight, title, visible)
 }
 
 func (m *Model) tagDetailLines(tag string, contentWidth int) []string {
@@ -344,7 +342,7 @@ func healthLiveness(svc *service.Service) *config.CheckConfig {
 
 func (m *Model) scrollDetails(direction int) {
 	_, detailHeight := m.serviceColumnLayout(m.height - 2)
-	viewportHeight := max(1, detailHeight-3)
+	viewportHeight := max(1, detailHeight-2)
 	contentWidth := max(1, m.dashboardLeftWidth()-2)
 	lineCount := 0
 	if m.listMode == listTags {

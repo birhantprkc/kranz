@@ -384,9 +384,19 @@ func TestServiceColumnShowsUpToTwentyItems(t *testing.T) {
 	defer model.Shutdown()
 
 	listHeight, detailHeight := model.serviceColumnLayout(100)
-	if listHeight != 23 || detailHeight != 77 {
-		t.Fatalf("25-item, 100-row column split = %d/%d, want 23/77", listHeight, detailHeight)
+	if listHeight != 22 || detailHeight != 78 {
+		t.Fatalf("25-item, 100-row column split = %d/%d, want 22/78", listHeight, detailHeight)
 	}
+	model.services = model.allServices[:20]
+	if start, end := model.visibleServiceRange(22); start != 0 || end != 20 {
+		t.Fatalf("20 services unexpectedly scroll: visible range = %d:%d", start, end)
+	}
+	model.services = model.allServices[:21]
+	model.focused = 20
+	if start, end := model.visibleServiceRange(22); start != 1 || end != 21 {
+		t.Fatalf("21 services do not scroll to the focused row: visible range = %d:%d", start, end)
+	}
+	model.focused = 0
 	model.services = model.services[:2]
 	listHeight, detailHeight = model.serviceColumnLayout(100)
 	if listHeight != 6 || detailHeight != 94 {

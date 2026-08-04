@@ -48,6 +48,7 @@ var (
 	SearchHighlightStyle  lipgloss.Style
 	SearchInputStyle      lipgloss.Style
 	PanelTitleStyle       lipgloss.Style
+	FocusedTitleStyle     lipgloss.Style
 	DetailLabelStyle      lipgloss.Style
 	SelectionStyle        lipgloss.Style
 	ContextBarStyle       lipgloss.Style
@@ -120,6 +121,15 @@ func applyPalette(theme Theme) {
 	SearchHighlightStyle = lipgloss.NewStyle().Background(ColorInfo).Foreground(lipgloss.Color(ensureContrast(theme.Surface, theme.Info, 4.5))).Bold(true)
 	SearchInputStyle = lipgloss.NewStyle().Foreground(ColorInfo)
 	PanelTitleStyle = lipgloss.NewStyle().Foreground(ColorGrey).Background(ColorSurfaceAlt).Bold(true)
+	focusedTitleBlend := 0.16
+	if background, ok := parseHex(theme.Background); ok && relativeLuminance(background) > 0.45 {
+		focusedTitleBlend = 0.10
+	}
+	focusedTitleBackground := mixHex(theme.SurfaceAlt, theme.Accent, focusedTitleBlend)
+	FocusedTitleStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ensureContrast(theme.Text, focusedTitleBackground, 4.5))).
+		Background(lipgloss.Color(focusedTitleBackground)).
+		Bold(true)
 	DetailLabelStyle = lipgloss.NewStyle().Foreground(ColorDim).Bold(true)
 	SelectionStyle = lipgloss.NewStyle().Foreground(ColorSelectText).Background(ColorSelection).Bold(true)
 	ContextBarStyle = lipgloss.NewStyle().Foreground(ColorDim)

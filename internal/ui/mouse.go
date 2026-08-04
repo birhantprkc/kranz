@@ -11,7 +11,7 @@ import (
 const (
 	dashboardHeaderRows = 1
 	dashboardFooterRows = 1
-	listFirstItemRow    = 3
+	listFirstItemRow    = 2
 	checkboxMinColumn   = 3
 	checkboxMaxColumn   = 5
 )

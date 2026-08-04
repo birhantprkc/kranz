@@ -224,6 +224,36 @@ func TestThemeStylesPanelTitlesAsSurfaceLabels(t *testing.T) {
 	if !reflect.DeepEqual(PanelTitleStyle.GetBackground(), lipgloss.Color(theme.SurfaceAlt)) {
 		t.Fatalf("panel title background = %#v, want styled surface %s", PanelTitleStyle.GetBackground(), theme.SurfaceAlt)
 	}
+	focusedBackground := mixHex(theme.SurfaceAlt, theme.Accent, 0.16)
+	if !reflect.DeepEqual(FocusedTitleStyle.GetBackground(), lipgloss.Color(focusedBackground)) {
+		t.Fatalf("focused panel title background = %#v, want pale accent %s", FocusedTitleStyle.GetBackground(), focusedBackground)
+	}
+}
+
+func TestLightThemeFocusUsesVeryPaleProjectAccent(t *testing.T) {
+	restoreDefaultTheme(t)
+	theme, err := ApplyThemeVariant("forest", "#2AB630", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := mixHex(theme.SurfaceAlt, theme.Accent, 0.10)
+	if got := FocusedTitleStyle.GetBackground(); !reflect.DeepEqual(got, lipgloss.Color(want)) {
+		t.Fatalf("light focused title background = %#v, want %s", got, want)
+	}
+	if reflect.DeepEqual(FocusedTitleStyle.GetBackground(), lipgloss.Color(theme.Accent)) {
+		t.Fatal("focused title uses the saturated project accent instead of a pale tint")
+	}
+	if !reflect.DeepEqual(PanelTitleStyle.GetBackground(), lipgloss.Color(theme.SurfaceAlt)) {
+		t.Fatalf("unfocused title background changed from neutral %s", theme.SurfaceAlt)
+	}
+	model := &Model{panelFocus: panelServices}
+	if got := model.panelTitleStyle(panelServices).GetBackground(); !reflect.DeepEqual(got, FocusedTitleStyle.GetBackground()) {
+		t.Fatalf("focused panel did not receive pale accent title: %#v", got)
+	}
+	if got := model.panelTitleStyle(panelDetails).GetBackground(); !reflect.DeepEqual(got, PanelTitleStyle.GetBackground()) {
+		t.Fatalf("unfocused panel did not keep neutral title: %#v", got)
+	}
 }
 
 func TestPortStyleUsesInfoColor(t *testing.T) {
@@ -241,7 +271,7 @@ func TestPortStyleUsesInfoColor(t *testing.T) {
 	}
 }
 
-func TestPanelTitlesFillWidthAndRestoreSurfaceAfterNestedStyles(t *testing.T) {
+func TestPanelTitlesOverlayTopBorderAndRestoreSurfaceAfterNestedStyles(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(previousProfile)
@@ -251,23 +281,30 @@ func TestPanelTitlesFillWidthAndRestoreSurfaceAfterNestedStyles(t *testing.T) {
 	}
 
 	const width = 32
-	rendered := renderPanelTitle("[3] LOGS"+ContextBarStyle.Render(" │ ")+ServiceNameStyle.Render("api"), width)
-	if got := lipgloss.Width(rendered); got != width {
-		t.Fatalf("panel title width = %d, want %d", got, width)
+	title := "[3] LOGS" + ContextBarStyle.Render(" │ ") + ServiceNameStyle.Render("api")
+	rendered := renderTitledPanel(FocusedPanelStyle, FocusedTitleStyle, width, 3, title, []string{"body"})
+	rows := strings.Split(rendered, "\n")
+	if got := lipgloss.Width(rows[0]); got != width+2 {
+		t.Fatalf("panel top width = %d, want %d", got, width+2)
 	}
-	if plain := ansi.Strip(rendered); !strings.HasSuffix(plain, strings.Repeat(" ", width-len("[3] LOGS │ api"))) {
-		t.Fatalf("panel title does not fill its row: %q", plain)
+	plainRows := strings.Split(ansi.Strip(rendered), "\n")
+	if !strings.HasPrefix(plainRows[0], "╭─ [3] LOGS │ api ") {
+		t.Fatalf("panel title does not overlay its top border: %q", plainRows[0])
+	}
+	if strings.Contains(plainRows[1], "[3] LOGS") || !strings.Contains(plainRows[1], "body") {
+		t.Fatalf("panel title still consumes a content row: %q", plainRows[1])
 	}
 
-	prefix := terminalStylePrefix(PanelTitleStyle)
+	prefix := terminalStylePrefix(FocusedTitleStyle)
 	const reset = "\x1b[0m"
+	label := renderPanelTitle(FocusedTitleStyle, title, width)
 	for offset := 0; ; {
-		relative := strings.Index(rendered[offset:], reset)
+		relative := strings.Index(label[offset:], reset)
 		if relative < 0 {
 			break
 		}
 		resetEnd := offset + relative + len(reset)
-		if resetEnd < len(rendered) && !strings.HasPrefix(rendered[resetEnd:], prefix) {
+		if resetEnd < len(label) && !strings.HasPrefix(label[resetEnd:], prefix) {
 			t.Fatalf("nested reset at byte %d does not restore the title surface", resetEnd-len(reset))
 		}
 		offset = resetEnd
