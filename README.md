@@ -88,6 +88,10 @@ will wait until the web service is ready.
 Already using Process Compose? Run `kranz` in a directory containing a
 supported `process-compose.yaml`; no separate Kranz configuration is required.
 
+Already have a `Procfile` or `Procfile.dev`? Kranz loads each `<name>: <command>`
+entry as a service, runs it from the Procfile directory, and reads the adjacent
+`.env`; no generated `kranz.yaml` is needed.
+
 ## Features
 
 - **Dependency-aware startup** with five conditions: started, healthy,
@@ -109,6 +113,8 @@ supported `process-compose.yaml`; no separate Kranz configuration is required.
   merged files, `.env`, and per-service `env_file`
 - **Process Compose compatibility** for a safe subset of existing
   `process-compose.yaml` projects
+- **Procfile compatibility** for conservative `name: command` files, preserving
+  service order and command text
 
 Interface details — 19 themes, full mouse support, `Ctrl+O` shell handoff, and
 in-app notifications — are described under [Controls](#controls).
@@ -181,6 +187,33 @@ kranz
 
 ## Configure
 
+### Procfile projects
+
+If your project already has a `Procfile` or `Procfile.dev`, run `kranz` from the
+same directory. Each non-comment line becomes a service in file order:
+
+```procfile
+web: go run ./cmd/web
+worker: bundle exec sidekiq
+```
+
+Kranz splits each entry at the first `:`, so colons inside the command are kept.
+Service names may contain letters, digits, `_`, and `-`. Blank lines and lines
+whose first non-space character is `#` are ignored. Invalid lines, empty
+commands, and duplicate names stop the whole load with the file path and line
+number; Kranz does not start a partial configuration.
+
+Commands run in the directory containing the Procfile. An adjacent `.env` is
+loaded automatically, while an existing host environment value wins over the
+same `.env` key. Both files are watched and valid edits hot-reload. Kranz never
+rewrites a Procfile, including when project appearance is saved. On stop, Kranz
+sends `SIGTERM` to the service process group, allows 30 seconds for graceful
+shutdown, and then uses `SIGKILL` if processes remain.
+
+Select services with `a`, start them with `s`, and quit with `q`.
+
+### Native Kranz YAML
+
 Create `kranz.yaml` in the project directory:
 
 ```yaml
@@ -239,11 +272,13 @@ kranz path/to/kranz.yaml
 kranz -f kranz.yaml -f kranz.local.yaml
 ```
 
-Without an explicit path, Kranz looks for `kranz.yaml`, `kranz.yml`,
-`process-compose.yaml`, and `process-compose.yml`, in that order.
+Without an explicit path, Kranz uses the first existing file in this order:
+`kranz.yaml`, `kranz.yml`, `process-compose.yaml`, `process-compose.yml`,
+`Procfile.dev`, then `Procfile`. Auto-discovery selects one primary file; in
+particular, it does not merge `Procfile.dev` with `Procfile`.
 For Process Compose projects, a matching `process-compose.override.yaml` or
 `process-compose.override.yml` is merged automatically when present. Explicit
-files are merged from left to right.
+files, including Procfile and native YAML layers, are merged from left to right.
 
 Configuration and environment files are watched. Valid edits are reconciled
 automatically, while invalid edits leave the last known good runtime untouched.
@@ -254,6 +289,9 @@ Press `Ctrl+L` to reload immediately.
 Kranz reads `.env` beside the first configuration file for variable expansion
 and process environment defaults. `defaults.env_files`, service `env_files`, and
 Process Compose `env_file`/`is_dotenv_disabled` entries are also supported.
+An existing host process-environment value takes precedence over the same key in
+the adjacent `.env`; explicit configuration environment values remain explicit
+overrides.
 
 Sources are merged per service, from lowest to highest precedence:
 
@@ -341,10 +379,10 @@ The picker saves to one of two destinations, and shows both paths:
 
 `Esc` closes the picker without saving.
 
-With multiple `-f` layers, Kranz updates the last native configuration layer,
-because it has the highest precedence. Process Compose files are never
-rewritten, so project theme persistence requires a native Kranz configuration
-layer.
+With multiple `-f` layers, project theme persistence requires the last,
+highest-precedence path to be a native Kranz configuration. Process Compose and
+Procfile sources are never rewritten; use the personal override destination
+when either is the active project path.
 
 ## Controls
 

@@ -3,19 +3,20 @@ package config
 
 import "time"
 
-// Config is the root structure of a native Kranz configuration.
+// Config is the normalized root structure for every supported source format.
 type Config struct {
-	Project     string             `yaml:"project"`
-	Version     string             `yaml:"version,omitempty"`
-	UI          UIConfig           `yaml:"ui,omitempty"`
-	Defaults    Defaults           `yaml:"defaults,omitempty"`
-	Services    map[string]Service `yaml:"services"`
-	Source      SourceFormat       `yaml:"-"`
-	Diagnostics []string           `yaml:"-"`
-	Paths       []string           `yaml:"-"`
-	WatchPaths  []string           `yaml:"-"`
-	dotenvEnv   map[string]string  `yaml:"-"`
-	explicitEnv map[string]string  `yaml:"-"`
+	Project      string             `yaml:"project"`
+	Version      string             `yaml:"version,omitempty"`
+	UI           UIConfig           `yaml:"ui,omitempty"`
+	Defaults     Defaults           `yaml:"defaults,omitempty"`
+	Services     map[string]Service `yaml:"services"`
+	ServiceOrder []string           `yaml:"-"`
+	Source       SourceFormat       `yaml:"-"`
+	Diagnostics  []string           `yaml:"-"`
+	Paths        []string           `yaml:"-"`
+	WatchPaths   []string           `yaml:"-"`
+	dotenvEnv    map[string]string  `yaml:"-"`
+	explicitEnv  map[string]string  `yaml:"-"`
 }
 
 // UIConfig defines project-specific presentation defaults.
@@ -41,6 +42,7 @@ type SourceFormat string
 const (
 	SourceKranz          SourceFormat = "kranz"
 	SourceProcessCompose SourceFormat = "process-compose"
+	SourceProcfile       SourceFormat = "procfile"
 )
 
 // Defaults contains values inherited by every service that omits them.

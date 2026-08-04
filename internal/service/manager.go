@@ -146,7 +146,6 @@ func (m *Manager) Services() []*Service {
 	defer m.mu.RUnlock()
 
 	names := m.cfg.ServiceNames()
-	sort.Strings(names)
 
 	result := make([]*Service, 0, len(names))
 	for _, name := range names {

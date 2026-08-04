@@ -603,6 +603,70 @@ func TestManualConfigReloadReconcilesModel(t *testing.T) {
 	}
 }
 
+func TestProcfileAndDotenvReloadReconcileModel(t *testing.T) {
+	directory := t.TempDir()
+	procfilePath := filepath.Join(directory, "Procfile")
+	dotenvPath := filepath.Join(directory, ".env")
+	writeProcfile := func(command string) {
+		t.Helper()
+		if err := os.WriteFile(procfilePath, []byte("api: "+command+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeDotenv := func(value string) {
+		t.Helper()
+		if err := os.WriteFile(dotenvPath, []byte("RELOAD_VALUE="+value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeProcfile("sleep 60")
+	writeDotenv("one")
+	cfg, err := config.Load(procfilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewModelWithOptions(cfg, "test", ModelOptions{ConfigPaths: []string{procfilePath}})
+	defer model.Shutdown()
+	if !containsPath(model.configWatchPaths, procfilePath) || !containsPath(model.configWatchPaths, dotenvPath) {
+		t.Fatalf("watch paths = %v", model.configWatchPaths)
+	}
+
+	writeProcfile("sleep 61")
+	reloadModelForTest(t, model)
+	if got := model.FocusedService().Config.Command; got != "sleep 61" {
+		t.Fatalf("reloaded command = %q", got)
+	}
+
+	writeDotenv("two")
+	reloadModelForTest(t, model)
+	if got := model.FocusedService().Config.Env["RELOAD_VALUE"]; got != "two" {
+		t.Fatalf("reloaded dotenv value = %q", got)
+	}
+}
+
+func reloadModelForTest(t *testing.T, model *Model) {
+	t.Helper()
+	command := model.reloadConfig(true)
+	if command == nil {
+		t.Fatal("reload did not schedule a command")
+	}
+	message := command().(configReloadMsg)
+	_, _ = model.handleConfigReload(message)
+	if message.err != nil {
+		t.Fatalf("reload message error = %v", message.err)
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestZshCommandShellBindsCtrlOAndPreservesEnvironment(t *testing.T) {
 	if _, err := os.Stat("/bin/zsh"); err != nil {
 		t.Skip("zsh is unavailable")
