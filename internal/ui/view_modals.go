@@ -20,6 +20,9 @@ func (m *Model) renderHelpView() string {
 	offset := min(maxOffset, max(0, m.helpOffset))
 	end := min(len(body), offset+visibleHeight)
 	visible := body[offset:end]
+	for index := range visible {
+		visible[index] = "  " + visible[index]
+	}
 
 	lines := []string{ModalTitleStyle.Render(" Kranz Help "), ""}
 	lines = append(lines, visible...)
@@ -28,9 +31,9 @@ func (m *Model) renderHelpView() string {
 	if maxOffset > 0 {
 		footer = fmt.Sprintf("  [↑/k] Up  [↓/j] Down  %d–%d/%d    [Esc] Close", offset+1, end, len(body))
 	}
-	lines = append(lines, lipgloss.NewStyle().Foreground(ColorDim).Render(footer))
+	lines = append(lines, renderModalShortcuts(footer, lipgloss.NewStyle().Foreground(ColorDim)))
 
-	content := renderModal(strings.Join(lines, "\n"))
+	content := renderFlushModal(strings.Join(lines, "\n"))
 	return m.placeOverlay(content)
 }
 
@@ -67,9 +70,9 @@ func helpEntries() []helpEntry {
 		{"c", "Clear focused or pinned service logs after confirmation"},
 		{"q", "Quit"},
 		{"?", "Show this help"},
-		{"Ctrl+T", "Choose and persist a theme"},
+		{"Ctrl+T", "Choose and apply a theme"},
 		{"p / a / b / m", "In Themes: toggle theme, accent, background, or Auto/Dark/Light mode"},
-		{"Enter / c", "In Themes: save globally or save to the project config"},
+		{"Enter / g / c", "In Themes: apply for this session, save globally, or save to the project config"},
 		{"Ctrl+L", "Reload configuration and detect terminal appearance"},
 		{"Ctrl+O", "Open command shell; Ctrl+O returns to Kranz"},
 	}
@@ -295,7 +298,7 @@ func (m *Model) renderThemeView() string {
 	names := ThemeNames()
 	// Keep the controls visible even in a 24-row terminal. The fixed rows are
 	// the summary, footer, modal border/padding, and optional settings path.
-	fixedRows := 6 + 7 + 4
+	fixedRows := 7 + 7 + 4
 	if m.settingsPath != "" {
 		fixedRows++
 	}
@@ -318,10 +321,11 @@ func (m *Model) renderThemeView() string {
 	}
 	lines := []string{
 		ModalTitleStyle.Render(" Themes "),
-		fmt.Sprintf("Theme: %s", m.themePickerThemeLabel(projectTheme)),
-		fmt.Sprintf("Accent: %s", m.themePickerAccentLabel()),
-		fmt.Sprintf("Background: %s", m.themePickerBackgroundLabel()),
-		fmt.Sprintf("Mode: %s", m.themePickerColorModeLabel()),
+		"",
+		"  " + m.renderThemePickerThemeSetting(projectTheme),
+		"  " + renderThemeSetting("Accent", m.themePickerAccentLabel()),
+		"  " + renderThemeSetting("Background", m.themePickerBackgroundLabel()),
+		"  " + renderThemeSetting("Mode", m.themePickerColorModeLabel()),
 		"",
 	}
 	for index := start; index < start+visibleRows; index++ {
@@ -340,36 +344,81 @@ func (m *Model) renderThemeView() string {
 		if index == m.themeCursor {
 			line = renderSelectedLine(line)
 		}
-		lines = append(lines, line)
+		lines = append(lines, "  "+line)
 	}
 	if len(names) > visibleRows {
-		lines = append(lines, ContextBarStyle.Render(fmt.Sprintf("%d/%d", m.themeCursor+1, len(names))))
+		lines = append(lines, "  "+ContextBarStyle.Render(fmt.Sprintf("%d/%d", m.themeCursor+1, len(names))))
 	}
 	lines = append(lines,
 		"",
-		"[p] Theme: Project / Selected",
-		"[a] Accent: Project / Theme default",
-		"[b] Background: Terminal / Theme",
-		"[m] Mode: Auto / Dark / Light",
-		"[Enter] Save globally   [c] Save to project",
-		"[Esc] Cancel",
+		"  "+renderModalShortcuts("[p] Theme: Project / Selected", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[a] Accent: Project / Theme default", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[b] Background: Terminal / Theme", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[m] Mode: Auto / Dark / Light", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[Enter] Apply   [g] Save globally   [c] Save to project", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[Esc] Cancel", lipgloss.NewStyle()),
 	)
 	pathWidth := max(20, m.width-12)
 	if m.settingsPath != "" {
-		lines = append(lines, ContextBarStyle.Render(ansi.Truncate("Global: "+m.settingsPath, pathWidth, "…")))
+		lines = append(lines, "  "+ContextBarStyle.Render(ansi.Truncate("Global: "+m.settingsPath, pathWidth, "…")))
 	}
 	if path := m.themeProjectConfigPath(); path != "" {
-		lines = append(lines, ContextBarStyle.Render(ansi.Truncate("Project: "+path, pathWidth, "…")))
+		lines = append(lines, "  "+ContextBarStyle.Render(ansi.Truncate("Project: "+path, pathWidth, "…")))
 	}
-	return m.placeOverlay(renderModal(strings.Join(lines, "\n")))
+	return m.placeOverlay(renderFlushModal(strings.Join(lines, "\n")))
 }
 
 func renderModal(content string) string {
+	return renderModalWithStyle(content, ModalStyle)
+}
+
+func renderFlushModal(content string) string {
+	return renderModalWithStyle(content, ModalStyle.PaddingLeft(0).PaddingRight(0))
+}
+
+func renderModalWithStyle(content string, style lipgloss.Style) string {
 	modalContentStyle := lipgloss.NewStyle().Foreground(ColorGrey)
 	if !TerminalCanvas {
 		modalContentStyle = modalContentStyle.Background(ColorSurfaceAlt)
 	}
-	return ModalStyle.Render(preserveStyleAfterReset(content, modalContentStyle))
+	return style.Render(preserveStyleAfterReset(content, modalContentStyle))
+}
+
+func renderModalShortcuts(value string, textStyle lipgloss.Style) string {
+	var result strings.Builder
+	for len(value) > 0 {
+		start := strings.IndexByte(value, '[')
+		if start < 0 {
+			result.WriteString(textStyle.Render(value))
+			break
+		}
+		end := strings.IndexByte(value[start:], ']')
+		if end < 0 {
+			result.WriteString(textStyle.Render(value))
+			break
+		}
+		end += start
+		result.WriteString(textStyle.Render(value[:start]))
+		result.WriteString(HelpKeyStyle.Render(value[start : end+1]))
+		value = value[end+1:]
+	}
+	return result.String()
+}
+
+func renderThemeSetting(label, value string) string {
+	return label + ": " + HelpKeyStyle.Render(value)
+}
+
+func (m *Model) renderThemePickerThemeSetting(projectTheme string) string {
+	value := m.themePickerThemeLabel(projectTheme)
+	source, name, ok := strings.Cut(value, " · ")
+	if !ok {
+		return renderThemeSetting("Theme", value)
+	}
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.activeTheme.AccentText)).
+		Bold(true)
+	return "Theme: " + HelpKeyStyle.Render(source+" · ") + nameStyle.Render(name)
 }
 
 func (m *Model) themePickerThemeLabel(projectTheme string) string {

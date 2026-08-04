@@ -137,7 +137,7 @@ func (m *Model) dashboardLeftWidth() int {
 // renderHeader renders project identity, service counts, and the help control.
 func (m *Model) renderHeader() string {
 	running, pending, stopped := m.serviceCounts()
-	left := HeaderStyle.Render(fmt.Sprintf(" KRANZ  /  %s", m.cfg.Project))
+	left := HeaderStyle.Render(fmt.Sprintf("KRANZ  /  %s", m.cfg.Project))
 	summary := RunningBadgeStyle.Render(fmt.Sprintf("%d active", running)) + "  " +
 		StartingBadgeStyle.Render(fmt.Sprintf("%d pending", pending)) + "  " +
 		StoppedBadgeStyle.Render(fmt.Sprintf("%d stopped", stopped))

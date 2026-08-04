@@ -157,6 +157,8 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.themeUseProject = false
 		m.previewThemePicker()
 	case "enter":
+		m.applyThemePicker(names)
+	case "g", "G":
 		m.saveThemePicker(names)
 	case "c", "C":
 		m.saveThemePickerToProject()
@@ -175,7 +177,23 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) applyThemePicker(names []string) {
+	m.updateThemePickerSettings(names)
+	m.addNotification("appearance", "Appearance applied for this session: "+m.themePickerSummary(), config.LogInfo)
+	m.mode = ModeNormal
+}
+
 func (m *Model) saveThemePicker(names []string) {
+	m.updateThemePickerSettings(names)
+	if err := m.persistSettings(); err != nil {
+		m.addNotification("settings", err.Error(), config.LogError)
+	} else {
+		m.addNotification("appearance", "Appearance saved globally: "+m.themePickerSummary(), config.LogInfo)
+	}
+	m.mode = ModeNormal
+}
+
+func (m *Model) updateThemePickerSettings(names []string) {
 	if m.themeUseProject {
 		m.userSettings.Theme = ""
 	} else {
@@ -203,12 +221,6 @@ func (m *Model) saveThemePicker(names []string) {
 	} else {
 		m.userSettings.ColorMode = m.themeColorMode
 	}
-	if err := m.persistSettings(); err != nil {
-		m.addNotification("settings", err.Error(), config.LogError)
-	} else {
-		m.addNotification("appearance", "Appearance saved: "+m.themePickerSummary(), config.LogInfo)
-	}
-	m.mode = ModeNormal
 }
 
 func (m *Model) saveThemePickerToProject() {

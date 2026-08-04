@@ -32,13 +32,39 @@ func TestThemeOverridePrecedenceAndPersistence(t *testing.T) {
 
 	model.openThemePicker()
 	model.themeCursor = 0
-	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if saved.Theme != "kranz" || saved.Accent != "#FF00FF" {
 		t.Fatalf("saved override = %#v", saved)
+	}
+}
+
+func TestThemePickerEnterAppliesWithoutSaving(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.yaml")
+	model := NewModelWithOptions(&config.Config{
+		Project: "Session", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{SettingsPath: settingsPath})
+	defer model.Shutdown()
+
+	model.openThemePicker()
+	pressKey(model, 'j')
+	wantTheme := model.activeTheme.Name
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if model.mode != ModeNormal || model.userSettings.Theme != wantTheme || model.activeTheme.Name != wantTheme {
+		t.Fatalf("session appearance = mode %v, active %q, settings %#v", model.mode, model.activeTheme.Name, model.userSettings)
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("Enter wrote global settings: %v", err)
+	}
+
+	model.openThemePicker()
+	if model.themeUseProject || ThemeNames()[model.themeCursor] != wantTheme {
+		t.Fatalf("reopened picker lost session theme: project=%v cursor=%q", model.themeUseProject, ThemeNames()[model.themeCursor])
 	}
 }
 
@@ -81,8 +107,8 @@ func TestThemePickerAAppliesProjectAccentToSelectedTheme(t *testing.T) {
 		t.Fatalf("selected theme changed to %q", model.activeTheme.Name)
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
-	if model.userSettings.Accent != "#2AB630" || model.userSettings.Theme != "github-light" {
-		t.Fatalf("saved picker state = %#v", model.userSettings)
+	if model.mode != ModeNormal || model.activeTheme.Accent != "#2AB630" || model.userSettings.Accent != "#2AB630" || model.userSettings.Theme != "github-light" {
+		t.Fatalf("applied picker state = mode %v, active %#v, settings %#v", model.mode, model.activeTheme, model.userSettings)
 	}
 }
 
@@ -113,7 +139,7 @@ func TestThemePickerUsesClearProjectAndAccentToggles(t *testing.T) {
 	for _, expected := range []string{
 		"Theme: PROJECT · forest", "Accent: THEME DEFAULT", "Background: TERMINAL · inherited", "Mode: AUTO · Dark detected",
 		"[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme",
-		"[m] Mode: Auto / Dark / Light", "[Enter] Save globally", "[c] Save to project",
+		"[m] Mode: Auto / Dark / Light", "[Enter] Apply", "[g] Save globally", "[c] Save to project",
 	} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("theme picker does not explain %q:\n%s", expected, plain)
@@ -161,7 +187,7 @@ func TestThemePickerPersistsBackgroundOverrideAgainstProject(t *testing.T) {
 	if model.themeBackground != backgroundTerminal {
 		t.Fatalf("b background = %q, want terminal", model.themeBackground)
 	}
-	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +237,7 @@ func TestGlobalColorModeOverridePersistsIndependently(t *testing.T) {
 		t.Fatalf("global light override was not applied: %#v", model.activeTheme)
 	}
 	model.openThemePicker()
-	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +259,7 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 	model.openThemePicker()
 
 	plain := ansi.Strip(model.renderThemeView())
-	for _, expected := range []string{"[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "[Enter] Save globally", "[c] Save to project", "[Esc] Cancel", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
+	for _, expected := range []string{"[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "[Enter] Apply", "[g] Save globally", "[c] Save to project", "[Esc] Cancel", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("24-row theme picker clipped %q:\n%s", expected, plain)
 		}
@@ -269,9 +295,15 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	if model.themeColorMode != colorModeDark {
 		t.Fatal("mode toggle click did not select the dark variant")
 	}
-	clickRenderedText(t, model, "[Enter] Save globally")
+	clickRenderedText(t, model, "[Enter] Apply")
 	if model.mode != ModeNormal || model.userSettings.Theme != "" || model.userSettings.Accent != "theme" || model.userSettings.Background != "theme" || model.userSettings.ColorMode != "dark" {
-		t.Fatalf("theme save click left mode/settings %v/%#v", model.mode, model.userSettings)
+		t.Fatalf("theme apply click left mode/settings %v/%#v", model.mode, model.userSettings)
+	}
+
+	model.openThemePicker()
+	clickRenderedText(t, model, "[g] Save globally")
+	if model.mode != ModeNormal {
+		t.Fatalf("global theme save click left mode %v", model.mode)
 	}
 }
 
