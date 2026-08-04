@@ -19,7 +19,11 @@ func TestLinuxListenerScannerSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 	wantPort := listener.Addr().(*net.TCPAddr).Port
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
