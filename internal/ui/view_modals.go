@@ -232,11 +232,11 @@ func (m *Model) renderNotificationsView() string {
 
 // renderConfirmQuitView explains the process cleanup performed on exit.
 func (m *Model) renderConfirmQuitView() string {
-	content := renderModal(
-		" Quit Kranz? \n\n" +
-			"All child processes will be stopped and\ntheir listening ports will be released.\n\n" +
-			" [Enter/y] Stop everything and quit\n" +
-			" [Esc/n]   Stay here",
+	content := renderConfirmationModal(
+		"Quit Kranz?",
+		[]string{"All child processes will be stopped and", "their listening ports will be released."},
+		"[Enter/y] Stop everything and quit",
+		"[Esc/n]   Stay here",
 	)
 	return m.placeOverlay(content)
 }
@@ -244,7 +244,7 @@ func (m *Model) renderConfirmQuitView() string {
 // renderPortConflictView renders verified ownership details for occupied ports.
 func (m *Model) renderPortConflictView() string {
 	var lines []string
-	lines = append(lines, "⚠ Port conflict: "+m.conflictService)
+	lines = append(lines, renderConfirmTitle("⚠ Port conflict: "+m.conflictService))
 	lines = append(lines, "")
 
 	for port, info := range m.conflictPorts {
@@ -263,11 +263,11 @@ func (m *Model) renderPortConflictView() string {
 
 	lines = append(lines, "")
 	if m.conflictExternal {
-		lines = append(lines, "[k] Stop this external process and retry")
+		lines = append(lines, renderModalShortcuts("[k] Stop this external process and retry", lipgloss.NewStyle()))
 	} else {
 		lines = append(lines, "Stop the owning Kranz service before retrying.")
 	}
-	lines = append(lines, "[r/Enter] Retry  [s/Esc] Close")
+	lines = append(lines, renderModalShortcuts("[r/Enter] Retry  [s/Esc] Close", lipgloss.NewStyle()))
 
 	content := renderModal(strings.Join(lines, "\n"))
 	return m.placeOverlay(content)
@@ -275,9 +275,10 @@ func (m *Model) renderPortConflictView() string {
 
 // renderConfirmRestartView lists dependent services affected by a restart.
 func (m *Model) renderConfirmRestartView() string {
-	content := renderModal(
-		fmt.Sprintf(" Restart %q \n\nAlso restarts: %s\n\n[Enter/y] Continue  [Esc/n] Cancel",
-			m.confirmTarget, m.confirmAction),
+	content := renderConfirmationModal(
+		fmt.Sprintf("Restart %q", m.confirmTarget),
+		[]string{fmt.Sprintf("Also restarts: %s", m.confirmAction)},
+		"[Enter/y] Continue  [Esc/n] Cancel",
 	)
 	return m.placeOverlay(content)
 }
@@ -287,9 +288,10 @@ func (m *Model) renderConfirmClearLogsView() string {
 	if m.clearPinned {
 		panel = "pinned logs"
 	}
-	content := renderModal(
-		fmt.Sprintf(" Clear %s for %q? \n\nThis cannot be undone.\n\n[Enter] Clear  [Esc] Cancel",
-			panel, m.clearTarget),
+	content := renderConfirmationModal(
+		fmt.Sprintf("Clear %s for %q?", panel, m.clearTarget),
+		[]string{"This cannot be undone."},
+		"[Enter] Clear  [Esc] Cancel",
 	)
 	return m.placeOverlay(content)
 }
@@ -482,6 +484,25 @@ func renderModalShortcuts(value string, textStyle lipgloss.Style) string {
 		value = value[end+1:]
 	}
 	return result.String()
+}
+
+func renderConfirmationModal(title string, bodyLines []string, actionLines ...string) string {
+	lines := []string{renderConfirmTitle(title)}
+	if len(bodyLines) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, bodyLines...)
+	}
+	if len(actionLines) > 0 {
+		lines = append(lines, "")
+		for _, action := range actionLines {
+			lines = append(lines, renderModalShortcuts(action, lipgloss.NewStyle()))
+		}
+	}
+	return renderModal(strings.Join(lines, "\n"))
+}
+
+func renderConfirmTitle(title string) string {
+	return ModalTitleStyle.Padding(0).Render(title)
 }
 
 func renderThemeSetting(label, value string) string {

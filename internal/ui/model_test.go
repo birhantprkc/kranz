@@ -555,6 +555,31 @@ func TestModalShortcutHintsHighlightOnlyKeys(t *testing.T) {
 	}
 }
 
+func TestConfirmationModalAlignsTitleBodyAndActions(t *testing.T) {
+	modal := ansi.Strip(renderConfirmationModal(
+		"Confirm action",
+		[]string{"Confirmation details"},
+		"[Enter/y] Continue  [Esc/n] Cancel",
+	))
+	columns := make([]int, 0, 3)
+	for _, expected := range []string{"Confirm action", "Confirmation details", "[Enter/y] Continue"} {
+		column := -1
+		for _, line := range strings.Split(modal, "\n") {
+			if index := strings.Index(line, expected); index >= 0 {
+				column = lipgloss.Width(line[:index])
+				break
+			}
+		}
+		if column < 0 {
+			t.Fatalf("confirmation modal does not contain %q:\n%s", expected, modal)
+		}
+		columns = append(columns, column)
+	}
+	if columns[0] != columns[1] || columns[1] != columns[2] {
+		t.Fatalf("confirmation title, body, and actions use different left insets %v:\n%s", columns, modal)
+	}
+}
+
 func TestThemeSummaryHighlightsCurrentValues(t *testing.T) {
 	line := renderThemeSetting("Theme", "SELECTED · Nord")
 	if ansi.Strip(line) != "Theme: SELECTED · Nord" {
