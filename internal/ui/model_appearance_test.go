@@ -259,10 +259,33 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 	model.openThemePicker()
 
 	plain := ansi.Strip(model.renderThemeView())
-	for _, expected := range []string{"[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "[Enter] Apply", "[g] Save globally", "[c] Save to project", "[Esc] Cancel", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
+	for _, expected := range []string{"Preview", "Accent background", "Neutral background", "[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "[Enter] Apply", "[g] Save globally", "[c] Save to project", "[Esc] Cancel", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("24-row theme picker clipped %q:\n%s", expected, plain)
 		}
+	}
+	plainLines := strings.Split(plain, "\n")
+	themePositionLine, controlsLine := -1, -1
+	escapeLine, globalLine := -1, -1
+	for index, line := range plainLines {
+		if strings.Contains(line, "14/19") {
+			themePositionLine = index
+		}
+		if strings.Contains(line, "[p] Theme: Project / Selected") {
+			controlsLine = index
+		}
+		if strings.Contains(line, "[Esc] Cancel") {
+			escapeLine = index
+		}
+		if strings.Contains(line, "Global: /tmp/settings.yaml") {
+			globalLine = index
+		}
+	}
+	if escapeLine < 0 || globalLine != escapeLine+2 {
+		t.Errorf("config paths are not separated from the controls:\n%s", plain)
+	}
+	if themePositionLine < 0 || controlsLine != themePositionLine+2 {
+		t.Errorf("theme list is not separated from the controls:\n%s", plain)
 	}
 }
 
@@ -304,6 +327,103 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	clickRenderedText(t, model, "[g] Save globally")
 	if model.mode != ModeNormal {
 		t.Fatalf("global theme save click left mode %v", model.mode)
+	}
+}
+
+func TestThemePickerRowIsClickableOutsideItsName(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Clickable", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	rendered := model.View()
+	for y, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		nameStart := strings.Index(line, "GitHub Light")
+		if nameStart < 0 {
+			continue
+		}
+		// Click the palette at the end of the row, not the theme name.
+		theme, ok := LookupTheme("github-light")
+		if !ok {
+			t.Fatal("github-light theme not found")
+		}
+		x := lipgloss.Width(line[:nameStart]) + 20 + lipgloss.Width(themePalettePreview(theme)) - 1
+		_, _ = model.handleMouseMsg(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		if model.themeUseProject || model.activeTheme.Name != "github-light" {
+			t.Fatalf("palette click = project %v / %s", model.themeUseProject, model.activeTheme.Name)
+		}
+		return
+	}
+	t.Fatalf("GitHub Light row not found:\n%s", ansi.Strip(rendered))
+}
+
+func TestThemePickerUsesThemeIdentityColorsEvenWithProjectAccent(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Branded", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+	model.themeUseProject = false
+	model.themeProjectAccent = true
+
+	theme, ok := LookupTheme("dracula")
+	if !ok {
+		t.Fatal("dracula theme not found")
+	}
+	for index, name := range ThemeNames() {
+		if name == theme.Name {
+			model.themeCursor = index
+			break
+		}
+	}
+	model.previewThemePicker()
+	wantName := themeNameStyle(theme).Render(theme.DisplayName)
+	if setting := model.renderThemePickerThemeSetting(model.cfg.UI.Theme); !strings.Contains(setting, wantName) {
+		t.Fatalf("theme setting does not use Dracula identity color: %q", setting)
+	}
+
+	preview := themePalettePreview(theme)
+	plainPreview := ansi.Strip(preview)
+	if plainPreview != "● ● ● ●" {
+		t.Fatalf("palette preview = %q", plainPreview)
+	}
+	card := renderThemePreviewCard(theme)
+	plainCard := ansi.Strip(card)
+	for _, label := range []string{"Preview", "Text", "Muted text", "Accent background", "Neutral background"} {
+		if !strings.Contains(plainCard, label) {
+			t.Fatalf("theme preview card does not contain %q: %q", label, plainCard)
+		}
+	}
+	if lipgloss.Height(card) != 6 || !strings.Contains(plainCard, "╭") || !strings.Contains(plainCard, "╰") {
+		t.Fatalf("theme preview is not a bordered service-like card: %q", plainCard)
+	}
+	cardLines := strings.Split(plainCard, "\n")
+	if strings.Contains(cardLines[1], "─") || strings.Count(cardLines[1], "│") != 2 {
+		t.Fatalf("theme preview contains nested border artifacts: %q", plainCard)
+	}
+
+	accentSetting := model.renderThemePickerAccentSetting()
+	wantAccent := lipgloss.NewStyle().Foreground(lipgloss.Color(model.cfg.UI.Accent)).Bold(true).Render(model.cfg.UI.Accent)
+	if !strings.Contains(accentSetting, wantAccent) {
+		t.Fatalf("accent setting does not color its hex value: %q", accentSetting)
+	}
+}
+
+func TestThemePathsWrapWithoutEllipsis(t *testing.T) {
+	path := "/a/very/long/project/directory/whose/config/name-must-remain-visible/kranz.yaml"
+	lines := renderThemePath("Project", path, 24)
+	plain := ansi.Strip(strings.Join(lines, "\n"))
+	if strings.Contains(plain, "…") {
+		t.Fatalf("wrapped path was truncated: %q", plain)
+	}
+	compact := strings.Join(strings.Fields(plain), "")
+	if compact != "Project:"+path {
+		t.Fatalf("wrapped path lost content: %q", plain)
 	}
 }
 

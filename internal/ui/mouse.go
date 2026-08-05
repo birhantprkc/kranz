@@ -46,6 +46,23 @@ func renderedTextHit(rendered string, x, y int, label string) bool {
 	return false
 }
 
+// renderedTextRegionHit expands a text control's hit target by terminal cells
+// while still keeping the clickable area scoped to that control's row.
+func renderedTextRegionHit(rendered string, x, y int, label string, leftCells, rightCells int) bool {
+	lines := strings.Split(ansi.Strip(rendered), "\n")
+	if y < 0 || y >= len(lines) || label == "" {
+		return false
+	}
+	line := lines[y]
+	startByte := strings.Index(line, label)
+	if startByte < 0 {
+		return false
+	}
+	left := lipgloss.Width(line[:startByte]) - leftCells
+	right := lipgloss.Width(line[:startByte+len(label)]) + rightCells
+	return x >= left && x < right
+}
+
 // handleMouseMsg routes mouse input through the same state transitions used by
 // keyboard input. Keeping both paths aligned prevents click-only behavior from
 // drifting away from documented shortcuts.
@@ -322,7 +339,8 @@ func (m *Model) handleOverlayWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) 
 func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	for index, name := range ThemeNames() {
 		theme, _ := LookupTheme(name)
-		if renderedTextHit(rendered, msg.X, msg.Y, theme.DisplayName) {
+		rightCells := max(1, 20-lipgloss.Width(theme.DisplayName)) + lipgloss.Width(themePalettePreview(theme))
+		if renderedTextRegionHit(rendered, msg.X, msg.Y, theme.DisplayName, 2, rightCells) {
 			m.themeCursor = index
 			m.themeUseProject = false
 			m.previewThemePicker()

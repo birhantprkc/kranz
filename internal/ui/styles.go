@@ -121,11 +121,7 @@ func applyPalette(theme Theme) {
 	SearchHighlightStyle = lipgloss.NewStyle().Background(ColorInfo).Foreground(lipgloss.Color(ensureContrast(theme.Surface, theme.Info, 4.5))).Bold(true)
 	SearchInputStyle = lipgloss.NewStyle().Foreground(ColorInfo)
 	PanelTitleStyle = lipgloss.NewStyle().Foreground(ColorGrey).Background(ColorSurfaceAlt).Bold(true)
-	focusedTitleBlend := 0.16
-	if background, ok := parseHex(theme.Background); ok && relativeLuminance(background) > 0.45 {
-		focusedTitleBlend = 0.10
-	}
-	focusedTitleBackground := mixHex(theme.SurfaceAlt, theme.Accent, focusedTitleBlend)
+	focusedTitleBackground := focusedPanelTitleBackground(theme)
 	FocusedTitleStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ensureContrast(theme.Text, focusedTitleBackground, 4.5))).
 		Background(lipgloss.Color(focusedTitleBackground)).
@@ -146,4 +142,12 @@ func applyPalette(theme Theme) {
 		ModalStyle = ModalStyle.Background(ColorSurfaceAlt)
 		ModalTitleStyle = ModalTitleStyle.Background(ColorSurfaceAlt)
 	}
+}
+
+func focusedPanelTitleBackground(theme Theme) string {
+	blend := 0.16
+	if background, ok := parseHex(theme.Background); ok && relativeLuminance(background) > 0.45 {
+		blend = 0.10
+	}
+	return mixHex(theme.SurfaceAlt, theme.Accent, blend)
 }

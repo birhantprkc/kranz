@@ -296,76 +296,155 @@ func (m *Model) renderConfirmClearLogsView() string {
 
 func (m *Model) renderThemeView() string {
 	names := ThemeNames()
-	// Keep the controls visible even in a 24-row terminal. The fixed rows are
-	// the summary, footer, modal border/padding, and optional settings path.
-	fixedRows := 7 + 7 + 4
+	pathWidth := max(20, m.width-12)
+	pathLines := make([]string, 0, 2)
 	if m.settingsPath != "" {
-		fixedRows++
+		pathLines = append(pathLines, renderThemePath("Global", m.settingsPath, pathWidth)...)
 	}
-	if m.themeProjectConfigPath() != "" {
-		fixedRows++
-	}
-	visibleRows := min(len(names), max(1, m.height-fixedRows))
-	if visibleRows < len(names) {
-		// The scroll position indicator consumes one additional row.
-		visibleRows = max(1, visibleRows-1)
-	}
-	start := max(0, m.themeCursor-visibleRows/2)
-	if start+visibleRows > len(names) {
-		start = max(0, len(names)-visibleRows)
+	if path := m.themeProjectConfigPath(); path != "" {
+		pathLines = append(pathLines, renderThemePath("Project", path, pathWidth)...)
 	}
 
 	projectTheme := m.cfg.UI.Theme
 	if projectTheme == "" {
 		projectTheme = DefaultTheme
 	}
+	previewThemeName := names[m.themeCursor]
+	if m.themeUseProject {
+		previewThemeName = projectTheme
+	}
+	previewTheme, _ := LookupTheme(previewThemeName)
+	previewTheme = adaptThemeBackground(previewTheme, colorModeIsDark(m.themeColorMode, m.terminalDark))
+	previewCard := renderThemePreviewCard(previewTheme)
+	// Keep the controls visible even in a 24-row terminal. The fixed rows are
+	// the summary, footer, modal border/padding, path separator, and paths. The
+	// remaining rows are shared by the theme table and its side preview.
+	pathSeparatorRows := 0
+	if len(pathLines) > 0 {
+		pathSeparatorRows = 1
+	}
+	fixedRows := 6 + 5 + 4 + pathSeparatorRows + len(pathLines)
+	sectionRows := max(2, m.height-fixedRows)
+	themeCapacity := max(1, sectionRows-1) // ATMB header
+	showPosition := len(names) > themeCapacity && sectionRows >= 3
+	visibleRows := min(len(names), themeCapacity)
+	if showPosition {
+		// The scroll position indicator consumes one additional row.
+		visibleRows--
+	}
+	start := max(0, m.themeCursor-visibleRows/2)
+	if start+visibleRows > len(names) {
+		start = max(0, len(names)-visibleRows)
+	}
+
 	lines := []string{
 		ModalTitleStyle.Render(" Themes "),
 		"",
 		"  " + m.renderThemePickerThemeSetting(projectTheme),
-		"  " + renderThemeSetting("Accent", m.themePickerAccentLabel()),
+		"  " + m.renderThemePickerAccentSetting(),
 		"  " + renderThemeSetting("Background", m.themePickerBackgroundLabel()),
 		"  " + renderThemeSetting("Mode", m.themePickerColorModeLabel()),
-		"",
 	}
+	themeLines := []string{"  " + strings.Repeat(" ", 22) + ContextBarStyle.Render("A T M B")}
 	for index := start; index < start+visibleRows; index++ {
 		theme, _ := LookupTheme(names[index])
 		theme = adaptThemeBackground(theme, colorModeIsDark(m.themeColorMode, m.terminalDark))
-		swatchAccent := ensureContrast(theme.Accent, m.activeTheme.SurfaceAlt, 3.0)
 		marker := "  "
 		if index == m.themeCursor {
 			marker = "› "
 		}
-		swatches := lipgloss.NewStyle().Foreground(lipgloss.Color(swatchAccent)).Bold(true).Render("●") + " " +
-			lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Green)).Bold(true).Render("●") + " " +
-			lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Yellow)).Bold(true).Render("●") + " " +
-			lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Red)).Bold(true).Render("●")
-		line := fmt.Sprintf("%s%-20s %s", marker, theme.DisplayName, swatches)
+		name := themeNameStyle(theme).Render(theme.DisplayName)
+		line := marker + name + strings.Repeat(" ", max(1, 20-lipgloss.Width(theme.DisplayName))) + themePalettePreview(theme)
 		if index == m.themeCursor {
 			line = renderSelectedLine(line)
 		}
-		lines = append(lines, "  "+line)
+		themeLines = append(themeLines, "  "+line)
 	}
-	if len(names) > visibleRows {
-		lines = append(lines, "  "+ContextBarStyle.Render(fmt.Sprintf("%d/%d", m.themeCursor+1, len(names))))
+	if showPosition {
+		themeLines = append(themeLines, "  "+ContextBarStyle.Render(fmt.Sprintf("%d/%d", m.themeCursor+1, len(names))))
 	}
+	themeSection := strings.Join(themeLines, "\n")
+	if m.width >= 78 {
+		themeSection = lipgloss.JoinHorizontal(lipgloss.Top, themeSection, "   ", previewCard)
+	}
+	lines = append(lines, themeSection, "")
 	lines = append(lines,
-		"",
 		"  "+renderModalShortcuts("[p] Theme: Project / Selected", lipgloss.NewStyle()),
 		"  "+renderModalShortcuts("[a] Accent: Project / Theme default", lipgloss.NewStyle()),
-		"  "+renderModalShortcuts("[b] Background: Terminal / Theme", lipgloss.NewStyle()),
-		"  "+renderModalShortcuts("[m] Mode: Auto / Dark / Light", lipgloss.NewStyle()),
-		"  "+renderModalShortcuts("[Enter] Apply   [g] Save globally   [c] Save to project", lipgloss.NewStyle()),
-		"  "+renderModalShortcuts("[Esc] Cancel", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[b] Background: Terminal / Theme  [m] Mode: Auto / Dark / Light", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts("[Enter] Apply  [g] Save globally  [c] Save to project  [Esc] Cancel", lipgloss.NewStyle()),
 	)
-	pathWidth := max(20, m.width-12)
-	if m.settingsPath != "" {
-		lines = append(lines, "  "+ContextBarStyle.Render(ansi.Truncate("Global: "+m.settingsPath, pathWidth, "…")))
-	}
-	if path := m.themeProjectConfigPath(); path != "" {
-		lines = append(lines, "  "+ContextBarStyle.Render(ansi.Truncate("Project: "+path, pathWidth, "…")))
+	if len(pathLines) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, pathLines...)
 	}
 	return m.placeOverlay(renderFlushModal(strings.Join(lines, "\n")))
+}
+
+func themePalettePreview(theme Theme) string {
+	dot := func(color string) string {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render("●")
+	}
+	return strings.Join([]string{
+		dot(theme.Accent),
+		dot(theme.Text),
+		dot(theme.Muted),
+		dot(theme.Background),
+	}, " ")
+}
+
+func renderThemePreviewCard(theme Theme) string {
+	const contentWidth = 22
+	text := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Text)).Render(" Text")
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Muted)).Render(" Muted text")
+	accentText := ensureContrast(theme.Text, theme.Accent, 4.5)
+	accentBackground := lipgloss.NewStyle().
+		Width(contentWidth).
+		Foreground(lipgloss.Color(accentText)).
+		Background(lipgloss.Color(theme.Accent)).
+		Bold(true).
+		Render(" Accent background")
+	neutralText := ensureContrast(theme.Text, theme.SurfaceAlt, 4.5)
+	neutralBackground := lipgloss.NewStyle().
+		Width(contentWidth).
+		Foreground(lipgloss.Color(neutralText)).
+		Background(lipgloss.Color(theme.SurfaceAlt)).
+		Render(" Neutral background")
+	panelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Text)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Accent))
+	titleBackground := focusedPanelTitleBackground(theme)
+	titleText := ensureContrast(theme.Text, titleBackground, 4.5)
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(titleText)).
+		Background(lipgloss.Color(titleBackground)).
+		Bold(true)
+	return renderTitledPanel(panelStyle, titleStyle, contentWidth, 4, "Preview", []string{
+		text,
+		muted,
+		accentBackground,
+		neutralBackground,
+	})
+}
+
+func themeNameStyle(theme Theme) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(theme.AccentText)).Bold(true)
+}
+
+func renderThemePath(label, path string, width int) []string {
+	prefix := label + ": "
+	prefixWidth := lipgloss.Width(prefix)
+	parts := wrapDetailValue(path, max(1, width-prefixWidth))
+	lines := make([]string, 0, len(parts))
+	for index, part := range parts {
+		linePrefix := strings.Repeat(" ", prefixWidth)
+		if index == 0 {
+			linePrefix = ContextBarStyle.Render(prefix)
+		}
+		lines = append(lines, "  "+linePrefix+ContextBarStyle.Bold(true).Render(part))
+	}
+	return lines
 }
 
 func renderModal(content string) string {
@@ -409,16 +488,29 @@ func renderThemeSetting(label, value string) string {
 	return label + ": " + HelpKeyStyle.Render(value)
 }
 
+func (m *Model) renderThemePickerAccentSetting() string {
+	value := m.themePickerAccentLabel()
+	source, color, ok := strings.Cut(value, " · ")
+	if !ok || !hexColorPattern.MatchString(color) {
+		return renderThemeSetting("Accent", value)
+	}
+	colorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
+	return "Accent: " + HelpKeyStyle.Render(source+" · ") + colorStyle.Render(color)
+}
+
 func (m *Model) renderThemePickerThemeSetting(projectTheme string) string {
 	value := m.themePickerThemeLabel(projectTheme)
 	source, name, ok := strings.Cut(value, " · ")
 	if !ok {
 		return renderThemeSetting("Theme", value)
 	}
-	nameStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.activeTheme.AccentText)).
-		Bold(true)
-	return "Theme: " + HelpKeyStyle.Render(source+" · ") + nameStyle.Render(name)
+	themeName := projectTheme
+	if !m.themeUseProject {
+		themeName = ThemeNames()[m.themeCursor]
+	}
+	theme, _ := LookupTheme(themeName)
+	theme = adaptThemeBackground(theme, colorModeIsDark(m.themeColorMode, m.terminalDark))
+	return "Theme: " + HelpKeyStyle.Render(source+" · ") + themeNameStyle(theme).Render(name)
 }
 
 func (m *Model) themePickerThemeLabel(projectTheme string) string {
