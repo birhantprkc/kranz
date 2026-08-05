@@ -337,6 +337,13 @@ func (m *Model) handleOverlayWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) 
 }
 
 func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.themeAccentEditing {
+		return m, nil
+	}
+	accentSetting := ansi.Strip(m.renderThemePickerAccentSetting())
+	if renderedTextRegionHit(rendered, msg.X, msg.Y, accentSetting, 0, 0) {
+		return m.handleThemeKeys(keyMessage("A"))
+	}
 	for index, name := range ThemeNames() {
 		theme, _ := LookupTheme(name)
 		rightCells := max(1, 20-lipgloss.Width(theme.DisplayName)) + lipgloss.Width(themePalettePreview(theme))
@@ -347,17 +354,27 @@ func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Mo
 			return m, nil
 		}
 	}
-	return m.handleMouseKeyBindings(rendered, msg, []mouseKeyBinding{
+	bindings := []mouseKeyBinding{
 		{label: "[p] Theme: Project / Selected", key: "p"},
-		{label: "[a] Accent: Project / Theme default", key: "a"},
-		{label: "[b] Background: Terminal / Theme", key: "b"},
-		{label: "[m] Mode: Auto / Dark / Light", key: "m"},
-		{label: "[Enter] Apply", key: "enter"},
-		{label: "[r] Reload saved", key: "r"},
-		{label: "[g] Global", key: "g"},
-		{label: "[c] Project", key: "c"},
-		{label: "[Esc] Cancel", key: "esc"},
-	}, m.handleThemeKeys)
+	}
+	if strings.TrimSpace(m.cfg.UI.Accent) == "" {
+		bindings = append(bindings, mouseKeyBinding{label: "[a/Shift+A] Accent: Edit color", key: "A"})
+	} else {
+		bindings = append(bindings,
+			mouseKeyBinding{label: "[a] Accent: Project / Theme default", key: "a"},
+			mouseKeyBinding{label: "[Shift+A] Edit color", key: "A"},
+		)
+	}
+	bindings = append(bindings,
+		mouseKeyBinding{label: "[b] Background: Terminal / Theme", key: "b"},
+		mouseKeyBinding{label: "[m] Mode: Auto / Dark / Light", key: "m"},
+		mouseKeyBinding{label: "[Enter] Apply", key: "enter"},
+		mouseKeyBinding{label: "[r] Reload saved", key: "r"},
+		mouseKeyBinding{label: "[g] Global", key: "g"},
+		mouseKeyBinding{label: "[c] Project", key: "c"},
+		mouseKeyBinding{label: "[Esc] Cancel", key: "esc"},
+	)
+	return m.handleMouseKeyBindings(rendered, msg, bindings, m.handleThemeKeys)
 }
 
 func (m *Model) closeOverlayOnClick(rendered string, msg tea.MouseMsg) (tea.Model, tea.Cmd) {

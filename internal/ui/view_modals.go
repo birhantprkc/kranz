@@ -71,7 +71,8 @@ func helpEntries() []helpEntry {
 		{"q", "Quit"},
 		{"?", "Show this help"},
 		{"Ctrl+T", "Choose and apply a theme"},
-		{"p / a / b / m", "In Themes: toggle theme, accent, background, or Auto/Dark/Light mode"},
+		{"p / b / m", "In Themes: toggle theme, background, or Auto/Dark/Light mode"},
+		{"a / Shift+A", "In Themes: toggle the project accent or edit its six hex digits"},
 		{"Enter / r", "In Themes: apply for this session or reload saved appearance from configuration"},
 		{"g / c", "In Themes: save appearance globally or to the project config"},
 		{"Ctrl+L", "Reload configuration and detect terminal appearance"},
@@ -318,6 +319,10 @@ func (m *Model) renderThemeView() string {
 	}
 	previewTheme, _ := LookupTheme(previewThemeName)
 	previewTheme = adaptThemeBackground(previewTheme, colorModeIsDark(m.themeColorMode, m.terminalDark))
+	if candidate, ok := m.themeAccentCandidate(); ok {
+		previewTheme.Accent = candidate
+		previewTheme = normalizeTheme(previewTheme)
+	}
 	previewCard := renderThemePreviewCard(previewTheme)
 	// Keep the controls visible even in a 24-row terminal. The fixed rows are
 	// the summary, footer, modal border/padding, path separator, and paths. The
@@ -373,7 +378,7 @@ func (m *Model) renderThemeView() string {
 	lines = append(lines, themeSection, "")
 	lines = append(lines,
 		"  "+renderModalShortcuts("[p] Theme: Project / Selected", lipgloss.NewStyle()),
-		"  "+renderModalShortcuts("[a] Accent: Project / Theme default", lipgloss.NewStyle()),
+		"  "+renderModalShortcuts(m.themeAccentControlLabel(), lipgloss.NewStyle()),
 		"  "+renderModalShortcuts("[b] Background: Terminal / Theme  [m] Mode: Auto / Dark / Light", lipgloss.NewStyle()),
 		"  "+DetailLabelStyle.Render("SESSION")+"  "+renderModalShortcuts("[Enter] Apply  [r] Reload saved  [Esc] Cancel", lipgloss.NewStyle()),
 		"  "+DetailLabelStyle.Render("SAVE")+"     "+renderModalShortcuts("[g] Global  [c] Project", lipgloss.NewStyle()),
@@ -512,6 +517,24 @@ func renderThemeSetting(label, value string) string {
 }
 
 func (m *Model) renderThemePickerAccentSetting() string {
+	if m.themeAccentEditing {
+		inputStyle := HelpKeyStyle
+		swatch := ContextBarStyle.Render("○")
+		if candidate, ok := m.themeAccentCandidate(); ok {
+			inputStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(candidate)).Bold(true)
+			swatch = inputStyle.Render("●")
+		}
+		m.themeAccentInput.TextStyle = inputStyle
+		m.themeAccentInput.PlaceholderStyle = ContextBarStyle
+		m.themeAccentInput.Cursor.Style = inputStyle.Reverse(true)
+		m.themeAccentInput.Cursor.TextStyle = inputStyle
+		suffix := renderModalShortcuts("[Enter] Apply  [Esc] Cancel", ContextBarStyle)
+		if m.themeAccentError != "" {
+			suffix = PortWarningStyle.Render(m.themeAccentError)
+		}
+		input := lipgloss.NewStyle().Width(7).Render(m.themeAccentInput.View())
+		return "Accent: " + inputStyle.Render("#") + input + " " + swatch + "  " + suffix
+	}
 	value := m.themePickerAccentLabel()
 	source, color, ok := strings.Cut(value, " · ")
 	if !ok || !hexColorPattern.MatchString(color) {
@@ -519,6 +542,18 @@ func (m *Model) renderThemePickerAccentSetting() string {
 	}
 	colorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
 	return "Accent: " + HelpKeyStyle.Render(source+" · ") + colorStyle.Render(color)
+}
+
+func (m *Model) themeAccentControlLabel() string {
+	if strings.TrimSpace(m.cfg.UI.Accent) == "" {
+		return "[a/Shift+A] Accent: Edit color"
+	}
+	return "[a] Accent: Project / Theme default  [Shift+A] Edit color"
+}
+
+func (m *Model) themeAccentCandidate() (string, bool) {
+	candidate := "#" + strings.ToUpper(m.themeAccentInput.Value())
+	return candidate, m.themeAccentEditing && hexColorPattern.MatchString(candidate)
 }
 
 func (m *Model) renderThemePickerThemeSetting(projectTheme string) string {
@@ -545,6 +580,9 @@ func (m *Model) themePickerThemeLabel(projectTheme string) string {
 }
 
 func (m *Model) themePickerAccentLabel() string {
+	if m.themeCustomAccent != "" {
+		return "CUSTOM · " + m.themeCustomAccent
+	}
 	if !m.themeAccentChanged && isCustomAccent(m.themeOriginalAccent, m.cfg.UI.Accent) {
 		return "CUSTOM · " + m.themeOriginalAccent
 	}

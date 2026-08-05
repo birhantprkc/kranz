@@ -68,6 +68,91 @@ func TestThemePickerEnterAppliesWithoutSaving(t *testing.T) {
 	}
 }
 
+func TestThemeAccentEditorOpensWithoutProjectAccentAndAppliesHexSuffix(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Custom Accent", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+	originalAccent := model.activeTheme.Accent
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if !model.themeAccentEditing || model.themeAccentInput.Value() != strings.TrimPrefix(originalAccent, "#") {
+		t.Fatalf("accent editor = active %v / value %q", model.themeAccentEditing, model.themeAccentInput.Value())
+	}
+	plain := ansi.Strip(model.renderThemeView())
+	for _, expected := range []string{"Accent: #" + strings.TrimPrefix(originalAccent, "#"), "[Enter] Apply", "[Esc] Cancel", "[a/Shift+A] Accent: Edit color"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("accent editor does not contain %q:\n%s", expected, plain)
+		}
+	}
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#12abefz")})
+	if got := model.themeAccentInput.Value(); got != "12ABEF" {
+		t.Fatalf("sanitized accent input = %q", got)
+	}
+	candidateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#12ABEF")).Bold(true)
+	accentSetting := model.renderThemePickerAccentSetting()
+	if !strings.Contains(accentSetting, candidateStyle.Render("12ABEF")) || !strings.Contains(accentSetting, candidateStyle.Render("●")) {
+		t.Fatalf("valid accent candidate is not highlighted: %q", accentSetting)
+	}
+	if model.activeTheme.Accent != originalAccent {
+		t.Fatalf("accent changed before Enter: %q", model.activeTheme.Accent)
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.themeAccentEditing || model.mode != ModeThemes || model.activeTheme.Accent != "#12ABEF" || model.themeCustomAccent != "#12ABEF" {
+		t.Fatalf("applied accent editor = editing %v / mode %v / accent %q / custom %q",
+			model.themeAccentEditing, model.mode, model.activeTheme.Accent, model.themeCustomAccent)
+	}
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.mode != ModeNormal || model.userSettings.Accent != "#12ABEF" {
+		t.Fatalf("session accent = mode %v / settings %#v", model.mode, model.userSettings)
+	}
+}
+
+func TestThemeAccentEditorRejectsIncompleteInputAndEscCancels(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Project Accent", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+	originalAccent := model.activeTheme.Accent
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	initialSetting := ansi.Strip(model.renderThemePickerAccentSetting())
+	initialActionColumn := strings.Index(initialSetting, "[Enter]")
+	if initialActionColumn < 0 {
+		t.Fatalf("accent editor actions are missing: %q", initialSetting)
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("123")})
+	partialSetting := ansi.Strip(model.renderThemePickerAccentSetting())
+	if actionColumn := strings.Index(partialSetting, "[Enter]"); actionColumn != initialActionColumn {
+		t.Fatalf("accent editor actions shifted from column %d to %d: initial %q / partial %q",
+			initialActionColumn, actionColumn, initialSetting, partialSetting)
+	}
+	if !strings.Contains(partialSetting, "○") {
+		t.Fatalf("incomplete accent does not reserve the swatch: %q", partialSetting)
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	if !model.themeAccentEditing || model.themeAccentError == "" || model.activeTheme.Accent != originalAccent {
+		t.Fatalf("incomplete accent = editing %v / error %q / accent %q", model.themeAccentEditing, model.themeAccentError, model.activeTheme.Accent)
+	}
+	if plain := ansi.Strip(model.renderThemeView()); !strings.Contains(plain, "Enter 6 hex digits") {
+		t.Fatalf("accent validation is not visible:\n%s", plain)
+	}
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.themeAccentEditing || model.mode != ModeThemes || model.activeTheme.Accent != originalAccent || model.themeAccentChanged {
+		t.Fatalf("cancelled accent editor = editing %v / mode %v / accent %q / changed %v",
+			model.themeAccentEditing, model.mode, model.activeTheme.Accent, model.themeAccentChanged)
+	}
+}
+
 func TestThemePickerReloadsSavedAppearanceFromDisk(t *testing.T) {
 	tempDir := t.TempDir()
 	projectPath := filepath.Join(tempDir, "kranz.yaml")
@@ -339,6 +424,14 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	defer model.Shutdown()
 	model.width, model.height, model.ready = 110, 32, true
 	model.openThemePicker()
+	clickRenderedText(t, model, "Accent: PROJECT · #2AB630")
+	if !model.themeAccentEditing {
+		t.Fatal("clicking the accent field did not open its editor")
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.themeAccentEditing || model.mode != ModeThemes {
+		t.Fatalf("accent field Esc left editing/mode %v/%v", model.themeAccentEditing, model.mode)
+	}
 
 	clickRenderedText(t, model, "GitHub Light")
 	if model.themeUseProject || model.activeTheme.Name != "github-light" {
@@ -510,6 +603,33 @@ func TestThemePickerSavesAppearanceToProjectConfig(t *testing.T) {
 	}
 	if savedSettings != (usersettings.Settings{}) {
 		t.Fatalf("user overrides were not cleared: %#v", savedSettings)
+	}
+}
+
+func TestThemeAccentEditorSavesCustomColorToProject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kranz.yaml")
+	data := "project: Custom Accent\nui:\n  theme: forest\n  accent: '#2AB630'\nservices:\n  app:\n    command: exit 0\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewModel(cfg, "test")
+	defer model.Shutdown()
+	model.openThemePicker()
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#445566")})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.UI.Accent != "#445566" || model.mode != ModeNormal {
+		t.Fatalf("saved custom accent = %q / mode %v", saved.UI.Accent, model.mode)
 	}
 }
 

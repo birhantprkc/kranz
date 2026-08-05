@@ -204,6 +204,11 @@ type Model struct {
 	themeColorMode      string
 	themeAccentChanged  bool
 	themeOriginalAccent string
+	themeCustomAccent   string
+	themeAccentInput    textinput.Model
+	themeAccentEditing  bool
+	themeAccentReplace  bool
+	themeAccentError    string
 	configPaths         []string
 	configWatchPaths    []string
 	configStamps        map[string]configStamp
@@ -250,30 +255,31 @@ func NewModelWithOptions(cfg *config.Config, version string, options ModelOption
 	services := manager.Services()
 
 	model := &Model{
-		cfg:           cfg,
-		version:       version,
-		manager:       manager,
-		services:      services,
-		allServices:   services,
-		healthChecker: healthChecker,
-		portChecker:   portChecker,
-		portDetails:   make(map[int]*config.PortInfo),
-		selected:      make(map[string]bool),
-		expandedTags:  make(map[string]bool),
-		panelFocus:    panelServices,
-		listMode:      listServices,
-		logSearcher:   kranzlog.NewSearcher(),
-		searchInput:   newSearchInput(),
-		currentMatch:  -1,
-		searchMode:    searchFilter,
-		mode:          ModeNormal,
-		followMode:    true,
-		pinnedFollow:  true,
-		keys:          DefaultKeyMap(),
-		userSettings:  options.Settings,
-		settingsPath:  options.SettingsPath,
-		activeTheme:   activeTheme,
-		terminalDark:  terminalDark,
+		cfg:              cfg,
+		version:          version,
+		manager:          manager,
+		services:         services,
+		allServices:      services,
+		healthChecker:    healthChecker,
+		portChecker:      portChecker,
+		portDetails:      make(map[int]*config.PortInfo),
+		selected:         make(map[string]bool),
+		expandedTags:     make(map[string]bool),
+		panelFocus:       panelServices,
+		listMode:         listServices,
+		logSearcher:      kranzlog.NewSearcher(),
+		searchInput:      newSearchInput(),
+		themeAccentInput: newThemeAccentInput(),
+		currentMatch:     -1,
+		searchMode:       searchFilter,
+		mode:             ModeNormal,
+		followMode:       true,
+		pinnedFollow:     true,
+		keys:             DefaultKeyMap(),
+		userSettings:     options.Settings,
+		settingsPath:     options.SettingsPath,
+		activeTheme:      activeTheme,
+		terminalDark:     terminalDark,
 		// The executable already performed the initial detection. Suppress the
 		// focus event emitted immediately after focus reporting is enabled.
 		lastBackgroundProbe: time.Now(),
@@ -336,6 +342,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var searchCommand tea.Cmd
 		if m.mode == ModeSearch {
 			m.searchInput, searchCommand = m.searchInput.Update(msg)
+		} else if m.mode == ModeThemes && m.themeAccentEditing {
+			m.themeAccentInput, searchCommand = m.themeAccentInput.Update(msg)
 		}
 		return m, tea.Batch(tea.EnableMouseCellMotion, m.probeTerminalBackground(false), searchCommand)
 	case tea.KeyMsg:
@@ -429,6 +437,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == ModeSearch {
 			var command tea.Cmd
 			m.searchInput, command = m.searchInput.Update(msg)
+			return m, command
+		}
+		if m.mode == ModeThemes && m.themeAccentEditing {
+			var command tea.Cmd
+			m.themeAccentInput, command = m.themeAccentInput.Update(msg)
+			m.sanitizeThemeAccentInput()
 			return m, command
 		}
 		return m, nil

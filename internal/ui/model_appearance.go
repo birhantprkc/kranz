@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kranz-org/kranz/internal/config"
 	usersettings "github.com/kranz-org/kranz/internal/settings"
@@ -81,6 +82,14 @@ func applyAppearance(name, accent, background, colorMode string, terminalDark bo
 	)
 }
 
+func newThemeAccentInput() textinput.Model {
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 0
+	input.Width = 6
+	return input
+}
+
 func (m *Model) pollSystemAppearance() tea.Cmd {
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 		dark, available := detectSystemDarkMode()
@@ -133,6 +142,10 @@ func (m *Model) openThemePicker() {
 }
 
 func (m *Model) syncThemePickerControls() {
+	m.themeAccentEditing = false
+	m.themeAccentReplace = false
+	m.themeAccentError = ""
+	m.themeAccentInput.Blur()
 	m.themeCursor = 0
 	for index, name := range ThemeNames() {
 		if name == m.activeTheme.Name {
@@ -144,12 +157,19 @@ func (m *Model) syncThemePickerControls() {
 	projectAccent := strings.TrimSpace(m.cfg.UI.Accent)
 	m.themeOriginalAccent = m.userSettings.Accent
 	m.themeAccentChanged = false
+	m.themeCustomAccent = ""
+	if isCustomAccent(m.userSettings.Accent, m.cfg.UI.Accent) {
+		m.themeCustomAccent = strings.ToUpper(strings.TrimSpace(m.userSettings.Accent))
+	}
 	m.themeProjectAccent = projectAccent != "" && m.userSettings.Accent != "theme" &&
 		(m.themeUseProject || strings.EqualFold(m.userSettings.Accent, projectAccent))
 	_, _, m.themeBackground, m.themeColorMode = effectiveAppearance(m.cfg.UI, m.userSettings)
 }
 
 func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.themeAccentEditing {
+		return m.handleThemeAccentKeys(msg)
+	}
 	names := ThemeNames()
 	switch msg.String() {
 	case "up", "k":
@@ -171,8 +191,10 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p", "P":
 		m.themeUseProject = !m.themeUseProject
 		m.previewThemePicker()
-	case "a", "A":
-		m.toggleThemeAccentSource()
+	case "A":
+		return m, m.beginThemeAccentEdit()
+	case "a":
+		return m, m.toggleThemeAccentSource()
 	case "b", "B":
 		m.toggleThemeBackgroundSource()
 	case "m", "M":
@@ -181,6 +203,92 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelThemePicker()
 	}
 	return m, nil
+}
+
+func (m *Model) beginThemeAccentEdit() tea.Cmd {
+	value := strings.TrimPrefix(strings.TrimSpace(m.activeTheme.Accent), "#")
+	m.themeAccentInput.SetValue(strings.ToUpper(value))
+	m.themeAccentInput.CursorEnd()
+	m.themeAccentError = ""
+	m.themeAccentEditing = true
+	m.themeAccentReplace = true
+	return m.themeAccentInput.Focus()
+}
+
+func (m *Model) handleThemeAccentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.themeAccentInput.Blur()
+		m.themeAccentEditing = false
+		m.themeAccentReplace = false
+		m.themeAccentError = ""
+		return m, nil
+	case "enter":
+		accent := "#" + strings.ToUpper(m.themeAccentInput.Value())
+		if !hexColorPattern.MatchString(accent) {
+			m.themeAccentError = "Enter 6 hex digits"
+			return m, nil
+		}
+		m.themeCustomAccent = accent
+		m.themeAccentChanged = true
+		m.themeProjectAccent = false
+		m.themeAccentInput.Blur()
+		m.themeAccentEditing = false
+		m.themeAccentReplace = false
+		m.themeAccentError = ""
+		m.previewThemePicker()
+		return m, nil
+	case "tab", "shift+tab":
+		return m, nil
+	}
+
+	if msg.Type == tea.KeyRunes {
+		value := sanitizeThemeAccentValue(string(msg.Runes))
+		if value == "" {
+			return m, nil
+		}
+		if m.themeAccentReplace {
+			m.themeAccentInput.SetValue("")
+			m.themeAccentInput.CursorStart()
+		}
+		m.themeAccentReplace = false
+		msg.Runes = []rune(value)
+	} else {
+		if msg.String() == "ctrl+v" && m.themeAccentReplace {
+			m.themeAccentInput.SetValue("")
+			m.themeAccentInput.CursorStart()
+		}
+		m.themeAccentReplace = false
+	}
+	m.themeAccentError = ""
+	var command tea.Cmd
+	m.themeAccentInput, command = m.themeAccentInput.Update(msg)
+	m.sanitizeThemeAccentInput()
+	return m, command
+}
+
+func (m *Model) sanitizeThemeAccentInput() {
+	value := m.themeAccentInput.Value()
+	position := m.themeAccentInput.Position()
+	sanitized := sanitizeThemeAccentValue(value)
+	if len(sanitized) > 6 {
+		sanitized = sanitized[:6]
+	}
+	if sanitized == value {
+		return
+	}
+	m.themeAccentInput.SetValue(sanitized)
+	m.themeAccentInput.SetCursor(min(position, len(sanitized)))
+}
+
+func sanitizeThemeAccentValue(value string) string {
+	var result strings.Builder
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F') {
+			result.WriteRune(character)
+		}
+	}
+	return strings.ToUpper(result.String())
 }
 
 func (m *Model) reloadSavedAppearance() {
@@ -239,6 +347,8 @@ func (m *Model) updateThemePickerSettings(names []string) {
 	}
 	if m.themeAccentChanged {
 		switch {
+		case m.themeCustomAccent != "":
+			m.userSettings.Accent = m.themeCustomAccent
 		case !m.themeProjectAccent:
 			m.userSettings.Accent = "theme"
 		case m.themeUseProject:
@@ -272,7 +382,9 @@ func (m *Model) saveThemePickerToProject() {
 		Background: m.themeBackground,
 		ColorMode:  m.themeColorMode,
 	}
-	if m.themeProjectAccent || (!m.themeAccentChanged && isCustomAccent(m.themeOriginalAccent, m.cfg.UI.Accent)) {
+	if m.themeCustomAccent != "" {
+		appearance.Accent = m.themeCustomAccent
+	} else if m.themeProjectAccent || (!m.themeAccentChanged && isCustomAccent(m.themeOriginalAccent, m.cfg.UI.Accent)) {
 		appearance.Accent = m.activeTheme.Accent
 	}
 	if err := config.SaveUIAppearance(path, appearance); err != nil {
@@ -303,14 +415,15 @@ func (m *Model) saveThemePickerToProject() {
 	m.mode = ModeNormal
 }
 
-func (m *Model) toggleThemeAccentSource() {
+func (m *Model) toggleThemeAccentSource() tea.Cmd {
 	if strings.TrimSpace(m.cfg.UI.Accent) == "" {
-		m.addNotification("appearance", "This project does not define an accent", config.LogWarn)
-		return
+		return m.beginThemeAccentEdit()
 	}
 	m.themeAccentChanged = true
+	m.themeCustomAccent = ""
 	m.themeProjectAccent = !m.themeProjectAccent
 	m.previewThemePicker()
+	return nil
 }
 
 func (m *Model) toggleThemeBackgroundSource() {
@@ -335,6 +448,8 @@ func (m *Model) cycleThemeColorMode() {
 }
 
 func (m *Model) cancelThemePicker() {
+	m.themeAccentInput.Blur()
+	m.themeAccentEditing = false
 	m.userSettings = m.settingsBefore
 	m.activeTheme = m.themeBefore
 	applyPalette(m.themeBefore)
@@ -350,7 +465,9 @@ func (m *Model) previewThemePicker() {
 		}
 	}
 	accent := ""
-	if !m.themeAccentChanged && isCustomAccent(m.themeOriginalAccent, m.cfg.UI.Accent) {
+	if m.themeCustomAccent != "" {
+		accent = m.themeCustomAccent
+	} else if !m.themeAccentChanged && isCustomAccent(m.themeOriginalAccent, m.cfg.UI.Accent) {
 		accent = m.themeOriginalAccent
 	} else if m.themeProjectAccent {
 		accent = strings.TrimSpace(m.cfg.UI.Accent)

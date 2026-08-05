@@ -351,15 +351,24 @@ a dark terminal. Canvas and panel surfaces always share one base instead of
 producing a gray-outside/white-inside split.
 
 Open the live theme picker with `Ctrl+T`. Arrow navigation previews a selected
-theme, and the summary always shows exactly what will be applied or saved. Four
-independent toggles are available:
+theme, and the summary always shows exactly what will be applied or saved. The
+appearance controls are independent:
 
-| Key | Toggles |
+| Key | Action |
 |---|---|
 | `p` | Project theme / selected theme |
-| `a` | Project accent / theme-default accent |
+| `a` | Project accent / theme-default accent; opens the editor when no project accent exists |
+| `Shift+A` | Edit the current accent color |
 | `b` | Terminal / theme background ownership |
 | `m` | Auto / Dark / Light |
+
+The accent editor keeps the leading `#` fixed and accepts the six hexadecimal
+digits that follow it. The first typed value or pasted `#RRGGBB` replaces the
+current value; cursor keys, Backspace, Delete, Home, and End allow precise
+edits. Once all six digits are valid, the field, swatch, and preview card show
+the candidate color immediately. `Enter` applies it and returns to the picker,
+while `Esc` discards the field edit without closing the picker. The field can
+also be focused with the mouse.
 
 The picker groups temporary session actions separately from its two save
 destinations; both persistent paths are shown:
