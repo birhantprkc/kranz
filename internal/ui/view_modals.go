@@ -72,7 +72,8 @@ func helpEntries() []helpEntry {
 		{"?", "Show this help"},
 		{"Ctrl+T", "Choose and apply a theme"},
 		{"p / a / b / m", "In Themes: toggle theme, accent, background, or Auto/Dark/Light mode"},
-		{"Enter / g / c", "In Themes: apply for this session, save globally, or save to the project config"},
+		{"Enter / r", "In Themes: apply for this session or reload saved appearance from configuration"},
+		{"g / c", "In Themes: save appearance globally or to the project config"},
 		{"Ctrl+L", "Reload configuration and detect terminal appearance"},
 		{"Ctrl+O", "Open command shell; Ctrl+O returns to Kranz"},
 	}
@@ -325,7 +326,7 @@ func (m *Model) renderThemeView() string {
 	if len(pathLines) > 0 {
 		pathSeparatorRows = 1
 	}
-	fixedRows := 6 + 5 + 4 + pathSeparatorRows + len(pathLines)
+	fixedRows := 6 + 6 + 4 + pathSeparatorRows + len(pathLines)
 	sectionRows := max(2, m.height-fixedRows)
 	themeCapacity := max(1, sectionRows-1) // ATMB header
 	showPosition := len(names) > themeCapacity && sectionRows >= 3
@@ -374,7 +375,8 @@ func (m *Model) renderThemeView() string {
 		"  "+renderModalShortcuts("[p] Theme: Project / Selected", lipgloss.NewStyle()),
 		"  "+renderModalShortcuts("[a] Accent: Project / Theme default", lipgloss.NewStyle()),
 		"  "+renderModalShortcuts("[b] Background: Terminal / Theme  [m] Mode: Auto / Dark / Light", lipgloss.NewStyle()),
-		"  "+renderModalShortcuts("[Enter] Apply  [g] Save globally  [c] Save to project  [Esc] Cancel", lipgloss.NewStyle()),
+		"  "+DetailLabelStyle.Render("SESSION")+"  "+renderModalShortcuts("[Enter] Apply  [r] Reload saved  [Esc] Cancel", lipgloss.NewStyle()),
+		"  "+DetailLabelStyle.Render("SAVE")+"     "+renderModalShortcuts("[g] Global  [c] Project", lipgloss.NewStyle()),
 	)
 	if len(pathLines) > 0 {
 		lines = append(lines, "")

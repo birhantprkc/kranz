@@ -68,6 +68,48 @@ func TestThemePickerEnterAppliesWithoutSaving(t *testing.T) {
 	}
 }
 
+func TestThemePickerReloadsSavedAppearanceFromDisk(t *testing.T) {
+	tempDir := t.TempDir()
+	projectPath := filepath.Join(tempDir, "kranz.yaml")
+	projectData := "project: Reloaded\nui:\n  theme: forest\n  accent: '#2AB630'\nservices:\n  app:\n    command: exit 0\n"
+	if err := os.WriteFile(projectPath, []byte(projectData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(tempDir, "settings.yaml")
+	savedSettings := usersettings.Settings{Theme: "dracula", Background: backgroundTheme, ColorMode: colorModeDark}
+	if err := usersettings.Save(settingsPath, savedSettings); err != nil {
+		t.Fatal(err)
+	}
+
+	model := NewModelWithOptions(&config.Config{
+		Project: "Stale", UI: config.UIConfig{Theme: "nord"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{
+		Settings:     usersettings.Settings{Theme: "github-light"},
+		SettingsPath: settingsPath,
+		ConfigPaths:  []string{projectPath},
+	})
+	defer model.Shutdown()
+	model.openThemePicker()
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+
+	if model.mode != ModeThemes || model.cfg.UI.Theme != "forest" || model.userSettings != savedSettings || model.activeTheme.Name != "dracula" {
+		t.Fatalf("reloaded appearance = mode %v / project %#v / settings %#v / active %q",
+			model.mode, model.cfg.UI, model.userSettings, model.activeTheme.Name)
+	}
+	if model.themeUseProject || ThemeNames()[model.themeCursor] != "dracula" || model.themeBackground != backgroundTheme || model.themeColorMode != colorModeDark {
+		t.Fatalf("reloaded picker controls = project %v / theme %q / background %q / mode %q",
+			model.themeUseProject, ThemeNames()[model.themeCursor], model.themeBackground, model.themeColorMode)
+	}
+	if model.activeTheme.TerminalCanvas {
+		t.Fatal("saved theme background ownership was not restored")
+	}
+	model.cancelThemePicker()
+	if model.activeTheme.Name != "dracula" || model.userSettings != savedSettings {
+		t.Fatalf("cancel reverted the reloaded baseline: %q / %#v", model.activeTheme.Name, model.userSettings)
+	}
+}
+
 func TestUserThemeUsesItsOwnAccentInsteadOfProjectAccent(t *testing.T) {
 	themeName, accent, background, colorMode := effectiveAppearance(
 		config.UIConfig{Theme: "ocean", Accent: "#31C5F4"},
@@ -139,7 +181,7 @@ func TestThemePickerUsesClearProjectAndAccentToggles(t *testing.T) {
 	for _, expected := range []string{
 		"Theme: PROJECT · forest", "Accent: THEME DEFAULT", "Background: TERMINAL · inherited", "Mode: AUTO · Dark detected",
 		"[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme",
-		"[m] Mode: Auto / Dark / Light", "[Enter] Apply", "[g] Save globally", "[c] Save to project",
+		"[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "SAVE", "[g] Global", "[c] Project",
 	} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("theme picker does not explain %q:\n%s", expected, plain)
@@ -259,7 +301,7 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 	model.openThemePicker()
 
 	plain := ansi.Strip(model.renderThemeView())
-	for _, expected := range []string{"Preview", "Accent background", "Neutral background", "[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "[Enter] Apply", "[g] Save globally", "[c] Save to project", "[Esc] Cancel", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
+	for _, expected := range []string{"Preview", "Accent background", "Neutral background", "[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "[Esc] Cancel", "SAVE", "[g] Global", "[c] Project", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("24-row theme picker clipped %q:\n%s", expected, plain)
 		}
@@ -281,10 +323,10 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 			globalLine = index
 		}
 	}
-	if escapeLine < 0 || globalLine != escapeLine+2 {
+	if escapeLine < 0 || globalLine != escapeLine+3 {
 		t.Errorf("config paths are not separated from the controls:\n%s", plain)
 	}
-	if themePositionLine < 0 || controlsLine != themePositionLine+2 {
+	if themePositionLine < 0 || controlsLine < themePositionLine+2 {
 		t.Errorf("theme list is not separated from the controls:\n%s", plain)
 	}
 }
@@ -324,7 +366,12 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	}
 
 	model.openThemePicker()
-	clickRenderedText(t, model, "[g] Save globally")
+	clickRenderedText(t, model, "[r] Reload saved")
+	if model.mode != ModeThemes || model.activeTheme.Name != "forest" || model.userSettings != (usersettings.Settings{}) {
+		t.Fatalf("reload saved click left mode/theme/settings %v/%q/%#v", model.mode, model.activeTheme.Name, model.userSettings)
+	}
+
+	clickRenderedText(t, model, "[g] Global")
 	if model.mode != ModeNormal {
 		t.Fatalf("global theme save click left mode %v", model.mode)
 	}

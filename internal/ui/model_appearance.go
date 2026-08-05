@@ -128,6 +128,11 @@ func (m *Model) applyDetectedBackground(dark bool, source string) tea.Cmd {
 func (m *Model) openThemePicker() {
 	m.themeBefore = m.activeTheme
 	m.settingsBefore = m.userSettings
+	m.syncThemePickerControls()
+	m.mode = ModeThemes
+}
+
+func (m *Model) syncThemePickerControls() {
 	m.themeCursor = 0
 	for index, name := range ThemeNames() {
 		if name == m.activeTheme.Name {
@@ -142,7 +147,6 @@ func (m *Model) openThemePicker() {
 	m.themeProjectAccent = projectAccent != "" && m.userSettings.Accent != "theme" &&
 		(m.themeUseProject || strings.EqualFold(m.userSettings.Accent, projectAccent))
 	_, _, m.themeBackground, m.themeColorMode = effectiveAppearance(m.cfg.UI, m.userSettings)
-	m.mode = ModeThemes
 }
 
 func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -158,6 +162,8 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.previewThemePicker()
 	case "enter":
 		m.applyThemePicker(names)
+	case "r", "R":
+		m.reloadSavedAppearance()
 	case "g", "G":
 		m.saveThemePicker(names)
 	case "c", "C":
@@ -175,6 +181,38 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelThemePicker()
 	}
 	return m, nil
+}
+
+func (m *Model) reloadSavedAppearance() {
+	projectAppearance := m.cfg.UI
+	if len(m.configPaths) > 0 {
+		loaded, err := config.LoadFiles(m.configPaths)
+		if err != nil {
+			m.addNotification("appearance", "Could not reload project appearance: "+err.Error(), config.LogError)
+			return
+		}
+		projectAppearance = loaded.UI
+	}
+
+	userSettings, err := usersettings.Load(m.settingsPath)
+	if err != nil {
+		m.addNotification("appearance", "Could not reload global appearance: "+err.Error(), config.LogError)
+		return
+	}
+	name, accent, background, colorMode := effectiveAppearance(projectAppearance, userSettings)
+	theme, err := applyAppearance(name, accent, background, colorMode, m.terminalDark)
+	if err != nil {
+		m.addNotification("appearance", "Could not apply saved appearance: "+err.Error(), config.LogError)
+		return
+	}
+
+	m.cfg.UI = projectAppearance
+	m.userSettings = userSettings
+	m.activeTheme = theme
+	m.themeBefore = theme
+	m.settingsBefore = userSettings
+	m.syncThemePickerControls()
+	m.addNotification("appearance", "Saved appearance reloaded from configuration", config.LogInfo)
 }
 
 func (m *Model) applyThemePicker(names []string) {

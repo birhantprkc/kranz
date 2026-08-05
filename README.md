@@ -361,11 +361,14 @@ independent toggles are available:
 | `b` | Terminal / theme background ownership |
 | `m` | Auto / Dark / Light |
 
-The picker can apply the preview temporarily or save it to one of two
+The picker groups temporary session actions separately from its two save
 destinations; both persistent paths are shown:
 
 - **`Enter` — current session.** Applies the preview until Kranz exits without
   writing a file.
+- **`r` — reload saved appearance.** Re-reads the project configuration and
+  personal user override, resolves them with startup precedence, and applies
+  the result without restarting Kranz.
 - **`g` — personal user override.** Written atomically with user-only
   permissions to the platform configuration directory:
   `~/Library/Application Support/kranz/settings.yaml` on macOS, typically

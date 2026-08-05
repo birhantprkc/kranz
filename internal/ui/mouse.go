@@ -353,8 +353,9 @@ func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Mo
 		{label: "[b] Background: Terminal / Theme", key: "b"},
 		{label: "[m] Mode: Auto / Dark / Light", key: "m"},
 		{label: "[Enter] Apply", key: "enter"},
-		{label: "[g] Save globally", key: "g"},
-		{label: "[c] Save to project", key: "c"},
+		{label: "[r] Reload saved", key: "r"},
+		{label: "[g] Global", key: "g"},
+		{label: "[c] Project", key: "c"},
 		{label: "[Esc] Cancel", key: "esc"},
 	}, m.handleThemeKeys)
 }
