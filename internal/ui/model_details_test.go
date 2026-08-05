@@ -140,6 +140,7 @@ func TestReleasePortResultReportsErrorsWithoutRetry(t *testing.T) {
 func TestServiceDetailsUseAsyncPortInspection(t *testing.T) {
 	model := newTestModel()
 	defer model.Shutdown()
+	model.FocusedService().Config.Description = "HTTP API"
 	model.FocusedService().Config.HealthCheck = &config.HealthCheckConfig{
 		Readiness: &config.CheckConfig{Type: config.CheckHTTP, URL: "http://127.0.0.1:8080/ready"},
 		Liveness:  &config.CheckConfig{Type: config.CheckTCP, Port: 8080},
@@ -159,6 +160,19 @@ func TestServiceDetailsUseAsyncPortInspection(t *testing.T) {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("service details do not contain %q:\n%s", expected, plain)
 		}
+	}
+
+	allDetails := ansi.Strip(strings.Join(model.serviceDetailLines(model.FocusedService(), 72), "\n"))
+	previous := -1
+	for _, field := range []string{"PID ", "DIR ", "ABOUT ", "TAGS ", "DEPENDS ", "PORTS ", "READINESS ", "LIVENESS ", "RECOVERY", "SHUTDOWN", "COMMAND "} {
+		index := strings.Index(allDetails, field)
+		if index < 0 {
+			t.Fatalf("service details do not contain ordered field %q:\n%s", field, allDetails)
+		}
+		if index <= previous {
+			t.Fatalf("service detail field %q is out of order:\n%s", field, allDetails)
+		}
+		previous = index
 	}
 }
 
@@ -228,7 +242,7 @@ func TestLongDetailFieldWrapsBelowItsLabel(t *testing.T) {
 	}
 }
 
-func TestDirectoryMovesBelowPIDAndWrapsWithoutArrow(t *testing.T) {
+func TestPIDAndDirectoryUseSeparateLinesAndDirectoryWraps(t *testing.T) {
 	lines := pidDirectoryDetailLines(0, "apps/event-processor/a-very-long-subdirectory", 28)
 	plain := ansi.Strip(strings.Join(lines, "\n"))
 	if !strings.HasPrefix(plain, "PID 0\nDIR apps/") || strings.Contains(plain, "↳") {
@@ -241,8 +255,8 @@ func TestDirectoryMovesBelowPIDAndWrapsWithoutArrow(t *testing.T) {
 	}
 
 	wide := ansi.Strip(strings.Join(pidDirectoryDetailLines(0, "apps/event-processor", 80), "\n"))
-	if wide != "PID 0   DIR apps/event-processor" {
-		t.Fatalf("wide PID/DIR layout = %q, want one line", wide)
+	if wide != "PID 0\nDIR apps/event-processor" {
+		t.Fatalf("wide PID/DIR layout = %q, want separate lines", wide)
 	}
 }
 

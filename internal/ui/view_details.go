@@ -150,8 +150,9 @@ func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []str
 		serviceStatusIndicator(visualState) + " " + ServiceNameStyle.Render(svc.Name) + "  " +
 			ContextBarStyle.Render(serviceStatusLabel(svc.Status(), visualState)),
 	}
-	lines = append(lines, pidDirectoryDetailLines(svc.PID(), svc.Config.Dir, contentWidth)...)
-	lines = append(lines, runtimeDetailLines(svc, contentWidth)...)
+	if svc.Config.Disabled {
+		lines = append(lines, StartingBadgeStyle.Render("DISABLED")+" "+detailValue("manual start only"))
+	}
 	if visualState == visualQueued {
 		reason := "Scheduled by the current start operation"
 		if len(svc.Config.DependsOn) > 0 {
@@ -159,16 +160,18 @@ func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []str
 		}
 		lines = append(lines, detailFieldLines("START", StartingBadgeStyle.Render(reason), contentWidth)...)
 	}
+	lines = append(lines, pidDirectoryDetailLines(svc.PID(), svc.Config.Dir, contentWidth)...)
+	lines = append(lines, runtimeDetailLines(svc, contentWidth)...)
 	if svc.Config.Description != "" {
 		lines = append(lines, detailFieldLines("ABOUT", svc.Config.Description, contentWidth)...)
 	}
-	lines = append(lines, m.renderPortDetailLines(svc, contentWidth)...)
 	if len(svc.Config.Tags) == 0 {
 		lines = append(lines, detailFieldLines("TAGS", "—", contentWidth)...)
 	} else {
 		lines = append(lines, detailListItemsLines("TAGS", svc.Config.Tags, ", ", contentWidth)...)
 	}
 	lines = append(lines, dependencyDetailLines(svc, contentWidth)...)
+	lines = append(lines, m.renderPortDetailLines(svc, contentWidth)...)
 	detectedPorts := svc.DetectedPorts()
 	serviceActive := svc.Status() != config.StatusStopped
 	lines = append(lines, m.healthDetailLines("READINESS", healthReadiness(svc), m.readinessSummary(svc), detectedPorts, serviceActive, contentWidth)...)
@@ -187,9 +190,6 @@ func (m *Model) serviceDetailLines(svc *service.Service, contentWidth int) []str
 			codes = append(codes, strconv.Itoa(code))
 		}
 		lines = append(lines, detailFieldLines("SUCCESS", "0, "+strings.Join(codes, ", "), contentWidth)...)
-	}
-	if svc.Config.Disabled {
-		lines = append(lines, StartingBadgeStyle.Render("DISABLED")+" "+detailValue("manual start only"))
 	}
 	lines = append(lines, detailFieldLines("COMMAND", svc.Config.Command, contentWidth)...)
 	return lines
@@ -518,12 +518,6 @@ func detailFieldLines(label, value string, contentWidth int) []string {
 
 func pidDirectoryDetailLines(pid int, directory string, contentWidth int) []string {
 	pidValue := strconv.Itoa(pid)
-	if lipgloss.Width("PID "+pidValue+"   DIR "+directory) <= contentWidth {
-		return []string{
-			DetailLabelStyle.Render("PID") + " " + detailValue(pidValue) +
-				"   " + DetailLabelStyle.Render("DIR") + " " + detailValue(directory),
-		}
-	}
 	lines := []string{DetailLabelStyle.Render("PID") + " " + detailValue(pidValue)}
 	return append(lines, wrappedLabeledDetailLines("DIR", directory, contentWidth)...)
 }
