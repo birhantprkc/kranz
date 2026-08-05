@@ -654,7 +654,7 @@ func checkDescription(check *config.CheckConfig, detectedPorts []int, serviceAct
 }
 
 func detectingCheckDescription(check *config.CheckConfig, serviceActive bool) string {
-	marker := ContextBarStyle.Render("[DETECTING]")
+	marker := ContextBarStyle.Render("[PORT]")
 	if serviceActive {
 		marker = StartingBadgeStyle.Render("[DETECTING]")
 	}

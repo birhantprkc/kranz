@@ -339,9 +339,9 @@ func TestHealthTargetsStartAtFirstColumn(t *testing.T) {
 		{name: "resolved implicit tcp", check: &config.CheckConfig{Type: config.CheckTCP}, detectedPorts: []int{3802}, serviceActive: true, want: "tcp://localhost:3802"},
 		{name: "resolved implicit http selector", check: &config.CheckConfig{Type: config.CheckHTTP, URL: "http://localhost/healthz", DetectedPortIndex: intPointer(1)}, detectedPorts: []int{4800, 3801}, serviceActive: true, want: "http://localhost:4800/healthz"},
 		{name: "detecting tcp while active", check: &config.CheckConfig{Type: config.CheckTCP}, serviceActive: true, want: "tcp://localhost:[DETECTING]"},
-		{name: "detecting tcp while stopped", check: &config.CheckConfig{Type: config.CheckTCP}, want: "tcp://localhost:[DETECTING]"},
+		{name: "dynamic tcp port while stopped", check: &config.CheckConfig{Type: config.CheckTCP}, want: "tcp://localhost:[PORT]"},
 		{name: "detecting http preserves path and query", check: &config.CheckConfig{Type: config.CheckHTTP, URL: "http://localhost/healthz?deep=1"}, serviceActive: true, want: "http://localhost:[DETECTING]/healthz?deep=1"},
-		{name: "detecting ipv6 http", check: &config.CheckConfig{Type: config.CheckHTTP, URL: "https://[::1]/health"}, want: "https://[::1]:[DETECTING]/health"},
+		{name: "dynamic ipv6 http port while stopped", check: &config.CheckConfig{Type: config.CheckHTTP, URL: "https://[::1]/health"}, want: "https://[::1]:[PORT]/health"},
 		{name: "ambiguous", check: &config.CheckConfig{Type: config.CheckTCP, PortFrom: config.PortFromDetected}, detectedPorts: []int{3801, 4800}, serviceActive: true, want: "detected port is ambiguous: [3801 4800]; set detected_port_index"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
