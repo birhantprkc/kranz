@@ -30,6 +30,28 @@ const (
 	themeAccentSourceCustom
 )
 
+// themeBackgroundSource names who owns the canvas. Terminal and Theme are the
+// two long-standing owners; Custom pins a colour the user typed.
+type themeBackgroundSource uint8
+
+const (
+	// themeBackgroundSourceTerminal leaves the canvas unpainted so the terminal
+	// profile supplies its exact background.
+	themeBackgroundSourceTerminal themeBackgroundSource = iota
+	// themeBackgroundSourceTheme paints the canvas with the theme's own surface.
+	themeBackgroundSourceTheme
+	// themeBackgroundSourceCustom paints themeCustomBackground.
+	themeBackgroundSourceCustom
+)
+
+// themeColorTarget selects which colour the shared hex editor is editing.
+type themeColorTarget uint8
+
+const (
+	themeColorTargetAccent themeColorTarget = iota
+	themeColorTargetBackground
+)
+
 func effectiveAppearance(project config.UIConfig, user usersettings.Settings) (theme, accent, background, colorMode string) {
 	theme = project.Theme
 	accent = project.Accent
@@ -58,13 +80,30 @@ func effectiveAppearance(project config.UIConfig, user usersettings.Settings) (t
 	return theme, accent, background, colorMode
 }
 
+// normalizeBackgroundSource canonicalises a stored background. Like Accent, the
+// field multiplexes sentinels and a colour: "terminal" and "theme" name who owns
+// the canvas, and a #RRGGBB value pins one of the user's own.
 func normalizeBackgroundSource(source string) string {
-	switch strings.ToLower(strings.TrimSpace(source)) {
+	trimmed := strings.TrimSpace(source)
+	if hexColorPattern.MatchString(trimmed) {
+		return strings.ToUpper(trimmed)
+	}
+	switch strings.ToLower(trimmed) {
 	case backgroundTheme:
 		return backgroundTheme
 	default:
 		return backgroundTerminal
 	}
+}
+
+// customBackgroundColor reports the pinned canvas colour, if the stored value is
+// one rather than an ownership sentinel.
+func customBackgroundColor(source string) (string, bool) {
+	normalized := normalizeBackgroundSource(source)
+	if normalized == backgroundTerminal || normalized == backgroundTheme {
+		return "", false
+	}
+	return normalized, true
 }
 
 func normalizeColorMode(mode string) string {
@@ -90,18 +129,22 @@ func colorModeIsDark(mode string, terminalDark bool) bool {
 }
 
 func applyAppearance(name, accent, background, colorMode string, terminalDark bool) (Theme, error) {
+	custom, isCustom := customBackgroundColor(background)
 	return ApplyThemeVariant(
 		name,
 		accent,
+		custom,
 		colorModeIsDark(colorMode, terminalDark),
-		normalizeBackgroundSource(background) == backgroundTerminal,
+		// A pinned canvas colour is by definition painted by Kranz, so it can
+		// never leave the canvas to the terminal.
+		!isCustom && normalizeBackgroundSource(background) == backgroundTerminal,
 	)
 }
 
-func newThemeAccentInput() textinput.Model {
+func newThemeColorInput() textinput.Model {
 	input := textinput.New()
 	input.Prompt = ""
-	// The six-digit limit is enforced by sanitizeThemeAccentInput instead of
+	// The six-digit limit is enforced by sanitizeThemeColorInput instead of
 	// CharLimit. A limit here would truncate before sanitizing, so pasting the
 	// seven-character "#FF0000" would keep "#FF000" and lose the last digit;
 	// sanitizing first drops the "#" and leaves all six digits.
@@ -162,10 +205,10 @@ func (m *Model) openThemePicker() {
 }
 
 func (m *Model) syncThemePickerControls() {
-	m.themeAccentEditing = false
-	m.themeAccentReplace = false
-	m.themeAccentError = ""
-	m.themeAccentInput.Blur()
+	m.themeColorEditing = false
+	m.themeColorReplace = false
+	m.themeColorError = ""
+	m.themeColorInput.Blur()
 	m.themeCursor = 0
 	for index, name := range ThemeNames() {
 		if name == m.activeTheme.Name {
@@ -190,12 +233,49 @@ func (m *Model) syncThemePickerControls() {
 	default:
 		m.themeAccentSource = themeAccentSourceTheme
 	}
-	_, _, m.themeBackground, m.themeColorMode = effectiveAppearance(m.cfg.UI, m.userSettings)
+	var background string
+	_, _, background, m.themeColorMode = effectiveAppearance(m.cfg.UI, m.userSettings)
+	m.themeCustomBackground = ""
+	switch custom, isCustom := customBackgroundColor(background); {
+	case isCustom:
+		m.themeCustomBackground = custom
+		m.themeBackgroundSource = themeBackgroundSourceCustom
+	case background == backgroundTheme:
+		m.themeBackgroundSource = themeBackgroundSourceTheme
+	default:
+		m.themeBackgroundSource = themeBackgroundSourceTerminal
+	}
+}
+
+// themePickerAccentSources lists the accent sources the a key can reach. Custom
+// only joins once a colour exists, and Project only when the project declares
+// one, so the cycle never stops on a position that has nothing behind it.
+func (m *Model) themePickerAccentSources() []themeAccentSource {
+	sources := make([]themeAccentSource, 0, 3)
+	if strings.TrimSpace(m.cfg.UI.Accent) != "" {
+		sources = append(sources, themeAccentSourceProject)
+	}
+	sources = append(sources, themeAccentSourceTheme)
+	if m.themeCustomAccent != "" {
+		sources = append(sources, themeAccentSourceCustom)
+	}
+	return sources
+}
+
+// themePickerBackgroundSources lists the canvas owners the b key can reach.
+// Terminal and Theme always exist, so unlike the accent this cycle is never
+// degenerate.
+func (m *Model) themePickerBackgroundSources() []themeBackgroundSource {
+	sources := []themeBackgroundSource{themeBackgroundSourceTerminal, themeBackgroundSourceTheme}
+	if m.themeCustomBackground != "" {
+		sources = append(sources, themeBackgroundSourceCustom)
+	}
+	return sources
 }
 
 func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.themeAccentEditing {
-		return m.handleThemeAccentKeys(msg)
+	if m.themeColorEditing {
+		return m.handleThemeColorKeys(msg)
 	}
 	names := ThemeNames()
 	switch msg.String() {
@@ -219,11 +299,13 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.themeUseProject = !m.themeUseProject
 		m.previewThemePicker()
 	case "A":
-		return m, m.beginThemeAccentEdit()
+		return m, m.beginThemeColorEdit(themeColorTargetAccent)
 	case "a":
-		return m, m.toggleThemeAccentSource()
-	case "b", "B":
-		m.toggleThemeBackgroundSource()
+		return m, m.cycleThemeAccentSource()
+	case "B":
+		return m, m.beginThemeColorEdit(themeColorTargetBackground)
+	case "b":
+		m.cycleThemeBackgroundSource()
 	case "m", "M":
 		m.cycleThemeColorMode()
 	case "esc", "q":
@@ -232,37 +314,50 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) beginThemeAccentEdit() tea.Cmd {
-	value := strings.TrimPrefix(strings.TrimSpace(m.activeTheme.Accent), "#")
-	m.themeAccentInput.SetValue(strings.ToUpper(value))
-	m.themeAccentInput.CursorEnd()
-	m.themeAccentError = ""
-	m.themeAccentEditing = true
-	m.themeAccentReplace = true
-	return m.themeAccentInput.Focus()
+// beginThemeColorEdit opens the shared hex editor on one of the two colours,
+// seeded with what the preview currently shows so editing starts from the
+// visible value rather than from an empty field.
+func (m *Model) beginThemeColorEdit(target themeColorTarget) tea.Cmd {
+	m.themeColorTarget = target
+	seed := m.activeTheme.Accent
+	if target == themeColorTargetBackground {
+		seed = m.activeTheme.Background
+	}
+	value := strings.TrimPrefix(strings.TrimSpace(seed), "#")
+	m.themeColorInput.SetValue(strings.ToUpper(value))
+	m.themeColorInput.CursorEnd()
+	m.themeColorError = ""
+	m.themeColorEditing = true
+	m.themeColorReplace = true
+	return m.themeColorInput.Focus()
 }
 
-func (m *Model) handleThemeAccentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleThemeColorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.themeAccentInput.Blur()
-		m.themeAccentEditing = false
-		m.themeAccentReplace = false
-		m.themeAccentError = ""
+		m.themeColorInput.Blur()
+		m.themeColorEditing = false
+		m.themeColorReplace = false
+		m.themeColorError = ""
 		return m, nil
 	case "enter":
-		accent := "#" + strings.ToUpper(m.themeAccentInput.Value())
-		if !hexColorPattern.MatchString(accent) {
-			m.themeAccentError = "Enter 6 hex digits"
+		color := "#" + strings.ToUpper(m.themeColorInput.Value())
+		if !hexColorPattern.MatchString(color) {
+			m.themeColorError = "Enter 6 hex digits"
 			return m, nil
 		}
-		m.themeCustomAccent = accent
-		m.themeAccentChanged = true
-		m.themeAccentSource = themeAccentSourceCustom
-		m.themeAccentInput.Blur()
-		m.themeAccentEditing = false
-		m.themeAccentReplace = false
-		m.themeAccentError = ""
+		if m.themeColorTarget == themeColorTargetBackground {
+			m.themeCustomBackground = color
+			m.themeBackgroundSource = themeBackgroundSourceCustom
+		} else {
+			m.themeCustomAccent = color
+			m.themeAccentChanged = true
+			m.themeAccentSource = themeAccentSourceCustom
+		}
+		m.themeColorInput.Blur()
+		m.themeColorEditing = false
+		m.themeColorReplace = false
+		m.themeColorError = ""
 		m.previewThemePicker()
 		return m, nil
 	case "tab", "shift+tab":
@@ -270,48 +365,48 @@ func (m *Model) handleThemeAccentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.Type == tea.KeyRunes {
-		value := sanitizeThemeAccentValue(string(msg.Runes))
+		value := sanitizeThemeColorValue(string(msg.Runes))
 		if value == "" {
 			return m, nil
 		}
-		if m.themeAccentReplace {
-			m.themeAccentInput.SetValue("")
-			m.themeAccentInput.CursorStart()
+		if m.themeColorReplace {
+			m.themeColorInput.SetValue("")
+			m.themeColorInput.CursorStart()
 		}
-		m.themeAccentReplace = false
+		m.themeColorReplace = false
 		msg.Runes = []rune(value)
 	} else {
-		if msg.String() == "ctrl+v" && m.themeAccentReplace {
-			m.themeAccentInput.SetValue("")
-			m.themeAccentInput.CursorStart()
+		if msg.String() == "ctrl+v" && m.themeColorReplace {
+			m.themeColorInput.SetValue("")
+			m.themeColorInput.CursorStart()
 		}
-		m.themeAccentReplace = false
+		m.themeColorReplace = false
 	}
-	m.themeAccentError = ""
+	m.themeColorError = ""
 	var command tea.Cmd
-	m.themeAccentInput, command = m.themeAccentInput.Update(msg)
-	m.sanitizeThemeAccentInput()
+	m.themeColorInput, command = m.themeColorInput.Update(msg)
+	m.sanitizeThemeColorInput()
 	return m, command
 }
 
-// sanitizeThemeAccentInput keeps the field at six hexadecimal digits. Byte
+// sanitizeThemeColorInput keeps the field at six hexadecimal digits. Byte
 // slicing and byte lengths are safe against the rune cursor position only
-// because sanitizeThemeAccentValue admits ASCII hex digits and nothing else.
-func (m *Model) sanitizeThemeAccentInput() {
-	value := m.themeAccentInput.Value()
-	position := m.themeAccentInput.Position()
-	sanitized := sanitizeThemeAccentValue(value)
+// because sanitizeThemeColorValue admits ASCII hex digits and nothing else.
+func (m *Model) sanitizeThemeColorInput() {
+	value := m.themeColorInput.Value()
+	position := m.themeColorInput.Position()
+	sanitized := sanitizeThemeColorValue(value)
 	if len(sanitized) > 6 {
 		sanitized = sanitized[:6]
 	}
 	if sanitized == value {
 		return
 	}
-	m.themeAccentInput.SetValue(sanitized)
-	m.themeAccentInput.SetCursor(min(position, len(sanitized)))
+	m.themeColorInput.SetValue(sanitized)
+	m.themeColorInput.SetCursor(min(position, len(sanitized)))
 }
 
-func sanitizeThemeAccentValue(value string) string {
+func sanitizeThemeColorValue(value string) string {
 	var result strings.Builder
 	for _, character := range value {
 		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F') {
@@ -390,10 +485,10 @@ func (m *Model) updateThemePickerSettings(names []string) {
 		}
 	}
 	projectBackground := normalizeBackgroundSource(m.cfg.UI.Background)
-	if m.themeBackground == projectBackground {
+	if m.themePickerBackground() == projectBackground {
 		m.userSettings.Background = ""
 	} else {
-		m.userSettings.Background = m.themeBackground
+		m.userSettings.Background = m.themePickerBackground()
 	}
 	projectColorMode := normalizeColorMode(m.cfg.UI.ColorMode)
 	if m.themeColorMode == projectColorMode {
@@ -411,7 +506,7 @@ func (m *Model) saveThemePickerToProject() {
 	}
 	appearance := config.UIConfig{
 		Theme:      m.activeTheme.Name,
-		Background: m.themeBackground,
+		Background: m.themePickerBackground(),
 		ColorMode:  m.themeColorMode,
 	}
 	// An empty resolved accent means the theme keeps its own, which the project
@@ -452,38 +547,44 @@ func (m *Model) saveThemePickerToProject() {
 	m.mode = ModeNormal
 }
 
-// toggleThemeAccentSource switches between the project accent and the theme's
-// own. A project without an accent has nothing to toggle, so the key opens the
-// editor instead, as the README shortcut table documents.
-//
-// A consequence worth knowing before "fixing" it: in that project there is no
-// scoped way back to the theme default once an accent is committed. Esc closes
-// the editor but keeps the committed value; dropping it means cancelling the
-// whole picker with Esc or reloading from disk with r. That is accepted rather
-// than overlooked — an accent is typed rarely and on purpose, and a key that
-// silently discarded it would be the worse trade.
-func (m *Model) toggleThemeAccentSource() tea.Cmd {
-	if strings.TrimSpace(m.cfg.UI.Accent) == "" {
-		return m.beginThemeAccentEdit()
+// cycleThemeAccentSource walks the accent sources that actually exist. A typed
+// colour joins the cycle instead of being discarded, which is the only scoped
+// way back to it once the user moves off. When the project declares no accent
+// and nothing has been typed the cycle would be a single position, so the key
+// opens the editor instead — the behaviour the README shortcut table documents.
+func (m *Model) cycleThemeAccentSource() tea.Cmd {
+	sources := m.themePickerAccentSources()
+	if len(sources) == 1 {
+		return m.beginThemeColorEdit(themeColorTargetAccent)
 	}
 	m.themeAccentChanged = true
-	m.themeCustomAccent = ""
-	if m.themeAccentSource == themeAccentSourceProject {
-		m.themeAccentSource = themeAccentSourceTheme
-	} else {
-		m.themeAccentSource = themeAccentSourceProject
-	}
+	m.themeAccentSource = sources[(indexOfAccentSource(sources, m.themeAccentSource)+1)%len(sources)]
 	m.previewThemePicker()
 	return nil
 }
 
-func (m *Model) toggleThemeBackgroundSource() {
-	if m.themeBackground == backgroundTerminal {
-		m.themeBackground = backgroundTheme
-	} else {
-		m.themeBackground = backgroundTerminal
-	}
+func (m *Model) cycleThemeBackgroundSource() {
+	sources := m.themePickerBackgroundSources()
+	m.themeBackgroundSource = sources[(indexOfBackgroundSource(sources, m.themeBackgroundSource)+1)%len(sources)]
 	m.previewThemePicker()
+}
+
+func indexOfBackgroundSource(sources []themeBackgroundSource, source themeBackgroundSource) int {
+	for index, candidate := range sources {
+		if candidate == source {
+			return index
+		}
+	}
+	return 0
+}
+
+func indexOfAccentSource(sources []themeAccentSource, source themeAccentSource) int {
+	for index, candidate := range sources {
+		if candidate == source {
+			return index
+		}
+	}
+	return 0
 }
 
 func (m *Model) cycleThemeColorMode() {
@@ -499,8 +600,8 @@ func (m *Model) cycleThemeColorMode() {
 }
 
 func (m *Model) cancelThemePicker() {
-	m.themeAccentInput.Blur()
-	m.themeAccentEditing = false
+	m.themeColorInput.Blur()
+	m.themeColorEditing = false
 	m.userSettings = m.settingsBefore
 	m.activeTheme = m.themeBefore
 	applyPalette(m.themeBefore)
@@ -515,7 +616,7 @@ func (m *Model) previewThemePicker() {
 			name = DefaultTheme
 		}
 	}
-	theme, err := applyAppearance(name, m.themePickerAccent(), m.themeBackground, m.themeColorMode, m.terminalDark)
+	theme, err := applyAppearance(name, m.themePickerAccent(), m.themePickerBackground(), m.themeColorMode, m.terminalDark)
 	if err == nil {
 		m.activeTheme = theme
 	}
@@ -550,6 +651,20 @@ func (m *Model) themePickerAccent() string {
 		return strings.TrimSpace(m.cfg.UI.Accent)
 	default:
 		return ""
+	}
+}
+
+// themePickerBackground resolves the canvas the picker currently represents, in
+// the same shape the config and the user settings store: the "terminal" or
+// "theme" sentinel, or a pinned #RRGGBB colour.
+func (m *Model) themePickerBackground() string {
+	switch m.themeBackgroundSource {
+	case themeBackgroundSourceCustom:
+		return m.themeCustomBackground
+	case themeBackgroundSourceTheme:
+		return backgroundTheme
+	default:
+		return backgroundTerminal
 	}
 }
 

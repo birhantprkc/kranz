@@ -121,6 +121,63 @@ func normalizeTheme(theme Theme) Theme {
 	return theme
 }
 
+// readableTextOn returns a foreground that reads on an arbitrary background:
+// the preferred colour when it already contrasts, otherwise whichever of black
+// or white contrasts more. ensureContrast is not enough on its own here — it
+// lerps toward a single target picked from the background's lightness and can
+// stall short of the goal on mid-luminance colours, where white over #FF8800
+// tops out at 2.39.
+func readableTextOn(background, preferred string) string {
+	if contrastRatio(preferred, background) >= 4.5 {
+		return strings.ToUpper(preferred)
+	}
+	if contrastRatio("#FFFFFF", background) >= contrastRatio("#000000", background) {
+		return "#FFFFFF"
+	}
+	return "#000000"
+}
+
+// canvasTextColors returns the text, muted, and border colours that read on an
+// adapted canvas. adaptThemeBackground uses them when it flips a theme into the
+// other variant; applyCustomBackground uses them when the user pins a canvas of
+// their own.
+func canvasTextColors(dark bool) (text, muted, border string) {
+	if dark {
+		return "#E6EDF3", "#9DA7B3", "#3D4855"
+	}
+	return "#1F2328", "#59636E", "#A8B3BF"
+}
+
+// backgroundIsDark classifies a canvas colour. Unparseable input counts as dark
+// because every built-in theme except the light ones is dark.
+func backgroundIsDark(background string) bool {
+	color, ok := parseHex(background)
+	return !ok || relativeLuminance(color) <= 0.45
+}
+
+// applyCustomBackground pins a user-chosen canvas colour and rebuilds every
+// derived colour against it. The canvas is the input normalizeTheme reads to
+// derive surfaces, semantic colours, and contrast-corrected text, so a custom
+// background is not one more colour but a new starting point. Text, muted, and
+// border are not derived there, so they are re-picked here whenever the chosen
+// canvas is on the other side of the light/dark boundary from the theme's own.
+func applyCustomBackground(theme Theme, background string) Theme {
+	if !hexColorPattern.MatchString(background) {
+		return theme
+	}
+	if dark := backgroundIsDark(background); dark != backgroundIsDark(theme.Background) {
+		theme.Text, theme.Muted, theme.Border = canvasTextColors(dark)
+	}
+	theme.Background = strings.ToUpper(background)
+	theme.Surface = ""
+	theme.SurfaceAlt = ""
+	theme.Info = ""
+	theme.Data = ""
+	theme.Selection = ""
+	theme.SelectText = ""
+	return normalizeTheme(theme)
+}
+
 func adaptiveInfoColor(background string) string {
 	if color, ok := parseHex(background); ok && relativeLuminance(color) > 0.45 {
 		return "#0969DA"
@@ -153,20 +210,40 @@ func ApplyTheme(name, accent string) (Theme, error) {
 // terminal's detected light/dark mode while preserving the theme identity and
 // project accent.
 func ApplyThemeForBackground(name, accent string, darkBackground bool) (Theme, error) {
-	return ApplyThemeVariant(name, accent, darkBackground, true)
+	return ApplyThemeVariant(name, accent, "", darkBackground, true)
 }
 
 // ApplyThemeVariant selects a light or dark variant independently from who
 // paints the canvas. Terminal-owned canvases inherit the profile background;
-// theme-owned canvases paint the adapted surface themselves.
-func ApplyThemeVariant(name, accent string, dark, terminalCanvas bool) (Theme, error) {
+// theme-owned canvases paint the adapted surface themselves. A non-empty
+// background pins a #RRGGBB canvas of the user's own, which replaces the
+// adapted one and re-derives the palette from itself.
+func ApplyThemeVariant(name, accent, background string, dark, terminalCanvas bool) (Theme, error) {
+	theme, err := BuildTheme(name, accent, background, dark)
+	if err != nil {
+		return Theme{}, err
+	}
+	theme.TerminalCanvas = terminalCanvas
+	applyPalette(theme)
+	return theme, nil
+}
+
+// BuildTheme resolves a theme value without installing it as the active
+// palette. The theme picker needs this to draw a card of an appearance it is
+// only previewing; ApplyThemeVariant adds installation on top, so both follow
+// the same order and a preview can never disagree with what Apply produces.
+func BuildTheme(name, accent, background string, dark bool) (Theme, error) {
 	theme, err := resolveTheme(name, accent)
 	if err != nil {
 		return Theme{}, err
 	}
+	if background != "" && !hexColorPattern.MatchString(background) {
+		return Theme{}, fmt.Errorf("background must use #RRGGBB format, got %q", background)
+	}
 	theme = adaptThemeBackground(theme, dark)
-	theme.TerminalCanvas = terminalCanvas
-	applyPalette(theme)
+	if background != "" {
+		theme = applyCustomBackground(theme, background)
+	}
 	return theme, nil
 }
 
@@ -194,15 +271,10 @@ func adaptThemeBackground(theme Theme, dark bool) Theme {
 	}
 	if dark {
 		theme.Background, theme.SurfaceAlt = adaptiveDarkSurfaces(theme.Name)
-		theme.Text = "#E6EDF3"
-		theme.Muted = "#9DA7B3"
-		theme.Border = "#3D4855"
 	} else {
 		theme.Background, theme.SurfaceAlt = adaptiveLightSurfaces(theme.Name)
-		theme.Text = "#1F2328"
-		theme.Muted = "#59636E"
-		theme.Border = "#A8B3BF"
 	}
+	theme.Text, theme.Muted, theme.Border = canvasTextColors(dark)
 	theme.Surface = theme.Background
 	theme.Info = ""
 	theme.Data = ""

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -80,8 +82,8 @@ func TestThemeAccentEditorOpensWithoutProjectAccentAndAppliesHexSuffix(t *testin
 	originalAccent := model.activeTheme.Accent
 
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if !model.themeAccentEditing || model.themeAccentInput.Value() != strings.TrimPrefix(originalAccent, "#") {
-		t.Fatalf("accent editor = active %v / value %q", model.themeAccentEditing, model.themeAccentInput.Value())
+	if !model.themeColorEditing || model.themeColorInput.Value() != strings.TrimPrefix(originalAccent, "#") {
+		t.Fatalf("accent editor = active %v / value %q", model.themeColorEditing, model.themeColorInput.Value())
 	}
 	plain := ansi.Strip(model.renderThemeView())
 	for _, expected := range []string{"Accent: #" + strings.TrimPrefix(originalAccent, "#"), "[Enter] Apply", "[Esc] Cancel", "[a/Shift+A] Accent: Edit color"} {
@@ -91,21 +93,26 @@ func TestThemeAccentEditorOpensWithoutProjectAccentAndAppliesHexSuffix(t *testin
 	}
 
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#12abefz")})
-	if got := model.themeAccentInput.Value(); got != "12ABEF" {
+	if got := model.themeColorInput.Value(); got != "12ABEF" {
 		t.Fatalf("sanitized accent input = %q", got)
 	}
 	candidateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#12ABEF")).Bold(true)
 	accentSetting := model.renderThemePickerAccentSetting()
-	if !strings.Contains(accentSetting, candidateStyle.Render("12ABEF")) || !strings.Contains(accentSetting, candidateStyle.Render("●")) {
+	// The field carries the colour as its background and the dot repeats it.
+	field := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(readableTextOn("#12ABEF", model.activeTheme.Text))).
+		Background(lipgloss.Color("#12ABEF")).
+		Bold(true)
+	if !strings.Contains(accentSetting, field.Render("12ABEF")) || !strings.Contains(accentSetting, candidateStyle.Render("●")) {
 		t.Fatalf("valid accent candidate is not highlighted: %q", accentSetting)
 	}
 	if model.activeTheme.Accent != originalAccent {
 		t.Fatalf("accent changed before Enter: %q", model.activeTheme.Accent)
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
-	if model.themeAccentEditing || model.mode != ModeThemes || model.activeTheme.Accent != "#12ABEF" || model.themeCustomAccent != "#12ABEF" {
+	if model.themeColorEditing || model.mode != ModeThemes || model.activeTheme.Accent != "#12ABEF" || model.themeCustomAccent != "#12ABEF" {
 		t.Fatalf("applied accent editor = editing %v / mode %v / accent %q / custom %q",
-			model.themeAccentEditing, model.mode, model.activeTheme.Accent, model.themeCustomAccent)
+			model.themeColorEditing, model.mode, model.activeTheme.Accent, model.themeCustomAccent)
 	}
 
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
@@ -124,33 +131,44 @@ func TestThemeAccentEditorRejectsIncompleteInputAndEscCancels(t *testing.T) {
 	model.openThemePicker()
 	originalAccent := model.activeTheme.Accent
 
+	// Terminal columns, not byte offsets: the swatch glyph is multi-byte, so
+	// strings.Index would report a shift the user never sees.
+	actionColumn := func(setting string) int {
+		t.Helper()
+		index := strings.Index(setting, "[Enter]")
+		if index < 0 {
+			t.Fatalf("accent editor actions are missing: %q", setting)
+		}
+		return lipgloss.Width(setting[:index])
+	}
+
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
 	initialSetting := ansi.Strip(model.renderThemePickerAccentSetting())
-	initialActionColumn := strings.Index(initialSetting, "[Enter]")
-	if initialActionColumn < 0 {
-		t.Fatalf("accent editor actions are missing: %q", initialSetting)
-	}
+	initialActionColumn := actionColumn(initialSetting)
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("123")})
 	partialSetting := ansi.Strip(model.renderThemePickerAccentSetting())
-	if actionColumn := strings.Index(partialSetting, "[Enter]"); actionColumn != initialActionColumn {
+	if column := actionColumn(partialSetting); column != initialActionColumn {
 		t.Fatalf("accent editor actions shifted from column %d to %d: initial %q / partial %q",
-			initialActionColumn, actionColumn, initialSetting, partialSetting)
+			initialActionColumn, column, initialSetting, partialSetting)
+	}
+	if lipgloss.Width(initialSetting) != lipgloss.Width(partialSetting) {
+		t.Fatalf("accent editor row changed width: %d vs %d", lipgloss.Width(initialSetting), lipgloss.Width(partialSetting))
 	}
 	if !strings.Contains(partialSetting, "○") {
 		t.Fatalf("incomplete accent does not reserve the swatch: %q", partialSetting)
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
-	if !model.themeAccentEditing || model.themeAccentError == "" || model.activeTheme.Accent != originalAccent {
-		t.Fatalf("incomplete accent = editing %v / error %q / accent %q", model.themeAccentEditing, model.themeAccentError, model.activeTheme.Accent)
+	if !model.themeColorEditing || model.themeColorError == "" || model.activeTheme.Accent != originalAccent {
+		t.Fatalf("incomplete accent = editing %v / error %q / accent %q", model.themeColorEditing, model.themeColorError, model.activeTheme.Accent)
 	}
 	if plain := ansi.Strip(model.renderThemeView()); !strings.Contains(plain, "Enter 6 hex digits") {
 		t.Fatalf("accent validation is not visible:\n%s", plain)
 	}
 
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEsc})
-	if model.themeAccentEditing || model.mode != ModeThemes || model.activeTheme.Accent != originalAccent || model.themeAccentChanged {
+	if model.themeColorEditing || model.mode != ModeThemes || model.activeTheme.Accent != originalAccent || model.themeAccentChanged {
 		t.Fatalf("cancelled accent editor = editing %v / mode %v / accent %q / changed %v",
-			model.themeAccentEditing, model.mode, model.activeTheme.Accent, model.themeAccentChanged)
+			model.themeColorEditing, model.mode, model.activeTheme.Accent, model.themeAccentChanged)
 	}
 }
 
@@ -183,9 +201,9 @@ func TestThemePickerReloadsSavedAppearanceFromDisk(t *testing.T) {
 		t.Fatalf("reloaded appearance = mode %v / project %#v / settings %#v / active %q",
 			model.mode, model.cfg.UI, model.userSettings, model.activeTheme.Name)
 	}
-	if model.themeUseProject || ThemeNames()[model.themeCursor] != "dracula" || model.themeBackground != backgroundTheme || model.themeColorMode != colorModeDark {
+	if model.themeUseProject || ThemeNames()[model.themeCursor] != "dracula" || model.themeBackgroundSource != themeBackgroundSourceTheme || model.themeColorMode != colorModeDark {
 		t.Fatalf("reloaded picker controls = project %v / theme %q / background %q / mode %q",
-			model.themeUseProject, ThemeNames()[model.themeCursor], model.themeBackground, model.themeColorMode)
+			model.themeUseProject, ThemeNames()[model.themeCursor], model.themePickerBackground(), model.themeColorMode)
 	}
 	if model.activeTheme.TerminalCanvas {
 		t.Fatal("saved theme background ownership was not restored")
@@ -266,7 +284,7 @@ func TestThemePickerUsesClearProjectAndAccentToggles(t *testing.T) {
 	plain := ansi.Strip(model.renderThemeView())
 	for _, expected := range []string{
 		"Theme: PROJECT · forest", "Accent: THEME DEFAULT", "Background: TERMINAL · inherited", "Mode: AUTO · Dark detected",
-		"[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme",
+		"[p] Theme: Project / Selected", "[a] Accent: Project / Theme", "[b] Background: Terminal / Theme",
 		"[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "SAVE", "[g] Global", "[c] Project",
 	} {
 		if !strings.Contains(plain, expected) {
@@ -308,12 +326,12 @@ func TestThemePickerPersistsBackgroundOverrideAgainstProject(t *testing.T) {
 	}, "test", ModelOptions{SettingsPath: settingsPath})
 	defer model.Shutdown()
 	model.openThemePicker()
-	if model.themeBackground != backgroundTheme {
-		t.Fatalf("picker background = %q, want project theme source", model.themeBackground)
+	if model.themeBackgroundSource != themeBackgroundSourceTheme {
+		t.Fatalf("picker background = %q, want project theme source", model.themePickerBackground())
 	}
 	pressKey(model, 'b')
-	if model.themeBackground != backgroundTerminal {
-		t.Fatalf("b background = %q, want terminal", model.themeBackground)
+	if model.themeBackgroundSource != themeBackgroundSourceTerminal {
+		t.Fatalf("b background = %q, want terminal", model.themePickerBackground())
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	saved, err := usersettings.Load(settingsPath)
@@ -387,7 +405,7 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 	model.openThemePicker()
 
 	plain := ansi.Strip(model.renderThemeView())
-	for _, expected := range []string{"Preview", "Accent background", "Neutral background", "[p] Theme: Project / Selected", "[a] Accent: Project / Theme default", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "[Esc] Cancel", "SAVE", "[g] Global", "[c] Project", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
+	for _, expected := range []string{"Preview", "Accent background", "Neutral background", "[p] Theme: Project / Selected", "[a] Accent: Project / Theme", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "[Esc] Cancel", "SAVE", "[g] Global", "[c] Project", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("24-row theme picker clipped %q:\n%s", expected, plain)
 		}
@@ -426,12 +444,12 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	model.width, model.height, model.ready = 110, 32, true
 	model.openThemePicker()
 	clickRenderedText(t, model, "Accent: PROJECT · #2AB630")
-	if !model.themeAccentEditing {
+	if !model.themeColorEditing {
 		t.Fatal("clicking the accent field did not open its editor")
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEsc})
-	if model.themeAccentEditing || model.mode != ModeThemes {
-		t.Fatalf("accent field Esc left editing/mode %v/%v", model.themeAccentEditing, model.mode)
+	if model.themeColorEditing || model.mode != ModeThemes {
+		t.Fatalf("accent field Esc left editing/mode %v/%v", model.themeColorEditing, model.mode)
 	}
 
 	clickRenderedText(t, model, "GitHub Light")
@@ -442,12 +460,12 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	if !model.themeUseProject || model.activeTheme.Name != "forest" {
 		t.Fatalf("project toggle click = project %v / %s", model.themeUseProject, model.activeTheme.Name)
 	}
-	clickRenderedText(t, model, "[a] Accent: Project / Theme default")
+	clickRenderedText(t, model, "[a] Accent: Project / Theme")
 	if model.themeAccentSource != themeAccentSourceTheme {
 		t.Fatal("accent toggle click did not select the theme default")
 	}
 	clickRenderedText(t, model, "[b] Background: Terminal / Theme")
-	if model.themeBackground != backgroundTheme {
+	if model.themeBackgroundSource != themeBackgroundSourceTheme {
 		t.Fatal("background toggle click did not select a painted theme background")
 	}
 	clickRenderedText(t, model, "[m] Mode: Auto / Dark / Light")
@@ -664,15 +682,21 @@ func TestThemePickerCustomAccentOverridesProjectAccentAsOneSource(t *testing.T) 
 		t.Fatalf("label %q / summary %q", label, summary)
 	}
 
-	// The toggle walks the two remaining sources without resurrecting the custom.
-	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if model.themeAccentSource != themeAccentSourceProject || model.themeCustomAccent != "" || model.themePickerAccent() != "#00AAFF" {
-		t.Fatalf("first toggle = source %v / custom %q / accent %q",
-			model.themeAccentSource, model.themeCustomAccent, model.themePickerAccent())
+	// The key walks every source that exists and keeps the typed colour as a
+	// position in the cycle rather than discarding it.
+	press := func() { _, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}) }
+	press()
+	if model.themeAccentSource != themeAccentSourceProject || model.themePickerAccent() != "#00AAFF" {
+		t.Fatalf("first step = source %v / accent %q", model.themeAccentSource, model.themePickerAccent())
 	}
-	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	press()
 	if model.themeAccentSource != themeAccentSourceTheme || model.themePickerAccent() != "" {
-		t.Fatalf("second toggle = source %v / accent %q", model.themeAccentSource, model.themePickerAccent())
+		t.Fatalf("second step = source %v / accent %q", model.themeAccentSource, model.themePickerAccent())
+	}
+	press()
+	if model.themeAccentSource != themeAccentSourceCustom || model.themePickerAccent() != "#FF0000" {
+		t.Fatalf("the cycle lost the typed colour: source %v / accent %q",
+			model.themeAccentSource, model.themePickerAccent())
 	}
 }
 
@@ -871,9 +895,9 @@ func TestThemePickerSurvivesConfigReload(t *testing.T) {
 	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
 	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	if model.activeTheme.Accent != "#FF0000" || model.themeBackground != backgroundTheme || model.themeColorMode != colorModeDark {
+	if model.activeTheme.Accent != "#FF0000" || model.themeBackgroundSource != themeBackgroundSourceTheme || model.themeColorMode != colorModeDark {
 		t.Fatalf("picker state before reload = accent %q / background %q / mode %q",
-			model.activeTheme.Accent, model.themeBackground, model.themeColorMode)
+			model.activeTheme.Accent, model.themePickerBackground(), model.themeColorMode)
 	}
 
 	reloaded, err := config.Load(path)
@@ -886,8 +910,8 @@ func TestThemePickerSurvivesConfigReload(t *testing.T) {
 		t.Errorf("reload reverted the typed accent to %q while the panel still shows %q",
 			model.activeTheme.Accent, model.themePickerAccentLabel())
 	}
-	if model.themeBackground != backgroundTheme || model.themeColorMode != colorModeDark {
-		t.Errorf("reload dropped background/mode choices = %q / %q", model.themeBackground, model.themeColorMode)
+	if model.themeBackgroundSource != themeBackgroundSourceTheme || model.themeColorMode != colorModeDark {
+		t.Errorf("reload dropped background/mode choices = %q / %q", model.themePickerBackground(), model.themeColorMode)
 	}
 
 	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
@@ -935,5 +959,370 @@ func TestModalBordersShareTheModalSurface(t *testing.T) {
 					name, index, model.activeTheme.SurfaceAlt, line)
 			}
 		}
+	}
+}
+
+// Shift+B mirrors Shift+A: a typed canvas colour becomes a source of its own,
+// joins the b cycle instead of replacing it, and re-derives the palette from
+// itself the way a theme's own background would.
+func TestThemeBackgroundEditorPinsCanvasAndJoinsTheCycle(t *testing.T) {
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+	model := NewModel(&config.Config{
+		Project: "Canvas", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	if model.themeBackgroundSource != themeBackgroundSourceTerminal {
+		t.Fatalf("initial background source = %v", model.themeBackgroundSource)
+	}
+	if label := model.themeBackgroundControlLabel(); label != "[b] Background: Terminal / Theme" {
+		t.Fatalf("label offers Custom before one exists: %q", label)
+	}
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	if !model.themeColorEditing || model.themeColorTarget != themeColorTargetBackground {
+		t.Fatalf("Shift+B did not open the background editor: editing=%v target=%v",
+			model.themeColorEditing, model.themeColorTarget)
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("204060")})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if model.themeBackgroundSource != themeBackgroundSourceCustom || model.themeCustomBackground != "#204060" {
+		t.Fatalf("committed background = source %v / custom %q",
+			model.themeBackgroundSource, model.themeCustomBackground)
+	}
+	if model.activeTheme.Background != "#204060" || model.activeTheme.Surface != "#204060" {
+		t.Fatalf("canvas did not take the typed colour: %#v", model.activeTheme)
+	}
+	if model.activeTheme.SurfaceAlt == "#204060" || model.activeTheme.SurfaceAlt == "" {
+		t.Fatalf("elevated surface was not re-derived from the canvas: %q", model.activeTheme.SurfaceAlt)
+	}
+	if TerminalCanvas {
+		t.Fatal("a pinned canvas colour must be painted by Kranz, not the terminal")
+	}
+	if label := model.themeBackgroundControlLabel(); label != "[b] Background: Terminal / Theme / Custom" {
+		t.Fatalf("label does not offer the typed colour: %q", label)
+	}
+
+	// b walks all three and comes back to the typed colour.
+	for _, want := range []themeBackgroundSource{
+		themeBackgroundSourceTerminal, themeBackgroundSourceTheme, themeBackgroundSourceCustom,
+	} {
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+		if model.themeBackgroundSource != want {
+			t.Fatalf("cycle reached %v, want %v", model.themeBackgroundSource, want)
+		}
+	}
+	if model.themeCustomBackground != "#204060" {
+		t.Fatalf("cycling discarded the typed colour: %q", model.themeCustomBackground)
+	}
+}
+
+// A pinned canvas decides the light/dark text set, because Text, Muted, and
+// Border are not derived by normalizeTheme and would otherwise keep the values
+// the theme shipped with — unreadable on a canvas from the other side.
+func TestCustomBackgroundDrivesReadableText(t *testing.T) {
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+	for _, background := range []string{"#FFFFFF", "#F5EFE3", "#000000", "#101014"} {
+		theme, err := ApplyThemeVariant("forest", "", background, true, false)
+		if err != nil {
+			t.Fatalf("%s: %v", background, err)
+		}
+		if theme.Background != background {
+			t.Fatalf("%s: canvas = %q", background, theme.Background)
+		}
+		if got := contrastRatio(theme.Text, theme.Background); got < 4.5 {
+			t.Errorf("%s: text contrast %.2f", background, got)
+		}
+		if got := contrastRatio(theme.Muted, theme.Background); got < 3.0 {
+			t.Errorf("%s: muted contrast %.2f", background, got)
+		}
+	}
+	if _, err := ApplyThemeVariant("forest", "", "not-a-colour", true, false); err == nil {
+		t.Fatal("a malformed background was accepted")
+	}
+}
+
+// The canvas colour round-trips through the config the same way the accent
+// does: one field carrying either an ownership sentinel or a #RRGGBB value.
+func TestCustomBackgroundRoundTripsThroughSettings(t *testing.T) {
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+	settingsPath := filepath.Join(t.TempDir(), "settings.yaml")
+	model := NewModelWithOptions(&config.Config{
+		Project: "Canvas", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{SettingsPath: settingsPath})
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("204060")})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+
+	saved, err := usersettings.Load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Background != "#204060" {
+		t.Fatalf("saved background = %#v", saved)
+	}
+
+	reopened := NewModelWithOptions(&config.Config{
+		Project: "Canvas", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{Settings: saved, SettingsPath: settingsPath})
+	defer reopened.Shutdown()
+	reopened.width, reopened.height, reopened.ready = 110, 32, true
+	reopened.openThemePicker()
+	if reopened.themeBackgroundSource != themeBackgroundSourceCustom || reopened.themeCustomBackground != "#204060" {
+		t.Fatalf("reopened picker lost the canvas: source %v / custom %q",
+			reopened.themeBackgroundSource, reopened.themeCustomBackground)
+	}
+	if reopened.activeTheme.Background != "#204060" {
+		t.Fatalf("reopened canvas = %q", reopened.activeTheme.Background)
+	}
+}
+
+// The Preview card must show what Apply would produce. It used to be built from
+// the theme's own defaults with the in-flight editor value patched on top, so it
+// ignored the project accent, snapped back the moment Enter committed a custom
+// colour, and let a background being typed repaint the accent.
+func TestThemePreviewCardTracksThePickerNotTheThemeDefaults(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+
+	model := NewModel(&config.Config{
+		Project: "Branded", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 120, 34, true
+	model.openThemePicker()
+
+	borderOf := func() string {
+		t.Helper()
+		for _, line := range strings.Split(model.renderThemeView(), "\n") {
+			if !strings.Contains(ansi.Strip(line), "─ Preview ─") {
+				continue
+			}
+			segment := line[:strings.Index(line, "Preview")]
+			matches := regexp.MustCompile(`38;2;(\d+);(\d+);(\d+)`).FindAllStringSubmatch(segment, -1)
+			if len(matches) < 2 {
+				t.Fatalf("preview card border colour not found in %q", line)
+			}
+			group := matches[len(matches)-2]
+			return fmt.Sprintf("#%02X%02X%02X", atoi(t, group[1]), atoi(t, group[2]), atoi(t, group[3]))
+		}
+		t.Fatal("preview card not rendered")
+		return ""
+	}
+
+	if got := borderOf(); got != "#2AB630" {
+		t.Errorf("card ignores the project accent: %s", got)
+	}
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("FF8800")})
+	if got := borderOf(); got != "#FF8800" {
+		t.Errorf("card does not follow the value being typed: %s", got)
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := borderOf(); got != "#FF8800" {
+		t.Errorf("card reverted after the accent was committed: %s", got)
+	}
+
+	// A background being typed must not repaint the accent.
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("102030")})
+	if got := borderOf(); got != "#FF8800" {
+		t.Errorf("a background in progress hijacked the accent: %s", got)
+	}
+}
+
+func atoi(t *testing.T, value string) int {
+	t.Helper()
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		t.Fatalf("parse %q: %v", value, err)
+	}
+	return number
+}
+
+// Typing a colour adds a Custom position to the a and b labels. The key-hint
+// column reserves room for it up front, because sizing to the current labels
+// made the modal jump nine columns wider the moment a custom colour appeared.
+func TestThemePickerWidthDoesNotChangeWhenCustomColoursAppear(t *testing.T) {
+	// The modal's own top border, measured as its unbroken run of box drawing.
+	modalWidth := func(model *Model) int {
+		t.Helper()
+		for _, line := range strings.Split(ansi.Strip(model.renderThemeView()), "\n") {
+			index := strings.Index(line, "╭")
+			if index < 5 {
+				continue // a dashboard panel at the screen edge, not the modal
+			}
+			run := 0
+			for _, symbol := range line[index:] {
+				if symbol == '─' {
+					run++
+				} else if run > 0 {
+					break
+				}
+			}
+			if run > 10 {
+				return run + 2
+			}
+		}
+		t.Fatal("theme picker modal not found")
+		return 0
+	}
+
+	for _, projectAccent := range []string{"#2AB630", ""} {
+		model := NewModel(&config.Config{
+			Project: "Widths", UI: config.UIConfig{Theme: "forest", Accent: projectAccent},
+			Services: map[string]config.Service{"app": {Command: "exit 0"}},
+		}, "test")
+		model.width, model.height, model.ready = 120, 34, true
+		model.openThemePicker()
+		want := modalWidth(model)
+
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("204060")})
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+		if got := modalWidth(model); got != want {
+			t.Errorf("project accent %q: a custom background changed the width %d → %d", projectAccent, want, got)
+		}
+
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("FF8800")})
+		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+		if got := modalWidth(model); got != want {
+			t.Errorf("project accent %q: a custom accent changed the width %d → %d", projectAccent, want, got)
+		}
+		model.Shutdown()
+	}
+}
+
+// A flush modal drops the style's horizontal padding so a full-width row can
+// reach the border, and every content line then carries its own two-space
+// indent. Nothing balanced that on the right, so the widest row — the key hints
+// — sat flush against the frame.
+func TestThemePickerKeepsEqualSideMargins(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Margins", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 120, 34, true
+	model.openThemePicker()
+
+	lines := strings.Split(ansi.Strip(model.renderThemeView()), "\n")
+	left, right := -1, -1
+	for _, line := range lines {
+		runes := []rune(line)
+		for index, symbol := range runes {
+			if symbol != '╭' || index <= 5 {
+				continue // a dashboard panel at the screen edge, not the modal
+			}
+			left = index
+			for scan := index; scan < len(runes); scan++ {
+				if runes[scan] == '╮' {
+					right = scan
+					break
+				}
+			}
+			break
+		}
+		if left >= 0 {
+			break
+		}
+	}
+	if left < 0 || right <= left {
+		t.Fatal("theme picker modal not found")
+	}
+
+	// Cells, not bytes: the rows are full of multi-byte box drawing. Only rows
+	// framed by │ are content; the ╭─╮ and ╰─╯ rows are the frame itself.
+	widest := 0
+	for _, line := range lines {
+		runes := []rune(line)
+		if right >= len(runes) || runes[left] != '│' || runes[right] != '│' {
+			continue
+		}
+		inner := string(runes[left+1 : right])
+		if strings.TrimSpace(inner) == "" {
+			continue
+		}
+		widest = max(widest, lipgloss.Width(strings.TrimRight(inner, " ")))
+	}
+	if widest == 0 {
+		t.Fatal("no content rows found inside the modal")
+	}
+	if gutter := (right - left - 1) - widest; gutter != modalSideMargin {
+		t.Errorf("the widest row leaves %d cells before the frame, want %d to match the left indent",
+			gutter, modalSideMargin)
+	}
+}
+
+// The colour being typed is shown as the field's own background, so it reads as
+// an area rather than as a coloured glyph — a pale canvas colour on a pale
+// surface used to leave nothing visible. Its digits are lifted off it so the
+// field never swallows its own text.
+func TestColorEditorFieldCarriesTheColour(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+
+	light := false
+	model := NewModelWithOptions(&config.Config{
+		Project: "Swatch", UI: config.UIConfig{Theme: "forest", Background: backgroundTheme},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{DarkBackground: &light, Settings: usersettings.Settings{Background: backgroundTheme}})
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	// A pale canvas colour on a pale surface: the case from the report.
+	const canvas = "#F2F7F3"
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("F2F7F3")})
+	row := model.renderThemePickerBackgroundSetting()
+
+	foreground := readableTextOn(canvas, model.activeTheme.Text)
+	field := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(foreground)).
+		Background(lipgloss.Color(canvas)).
+		Bold(true)
+	if !strings.Contains(row, field.Render("#")) {
+		t.Errorf("the field does not carry the colour as its background: %q", row)
+	}
+	// Every colour the field can hold, including the mid-luminance ones where a
+	// single-direction correction stalls short of the goal.
+	for _, colour := range []string{canvas, "#1A1F1C", "#FF8800", "#808080", "#0969DA", "#FFFF00"} {
+		if got := contrastRatio(readableTextOn(colour, model.activeTheme.Text), colour); got < 4.5 {
+			t.Errorf("digits over %s read at only %.2f", colour, got)
+		}
+	}
+	if !strings.Contains(ansi.Strip(row), "●") {
+		t.Errorf("the swatch dot is missing: %q", ansi.Strip(row))
+	}
+
+	// An incomplete value keeps the row the same width, so committing one cannot
+	// shift what follows.
+	valid := lipgloss.Width(ansi.Strip(row))
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyBackspace})
+	partial := model.renderThemePickerBackgroundSetting()
+	if got := lipgloss.Width(ansi.Strip(partial)); got != valid {
+		t.Errorf("row width changed with an incomplete value: %d vs %d", got, valid)
+	}
+	if !strings.Contains(ansi.Strip(partial), "○") {
+		t.Errorf("an incomplete value does not reserve the swatch: %q", ansi.Strip(partial))
 	}
 }

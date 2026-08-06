@@ -337,12 +337,21 @@ func (m *Model) handleOverlayWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd, bool) 
 }
 
 func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.themeAccentEditing {
+	if m.themeColorEditing {
 		return m, nil
 	}
-	accentSetting := ansi.Strip(m.renderThemePickerAccentSetting())
-	if renderedTextRegionHit(rendered, msg.X, msg.Y, accentSetting, 0, 0) {
-		return m.handleThemeKeys(keyMessage("A"))
+	// Clicking either colour row opens that row's editor, the same as its
+	// Shift-key shortcut.
+	for _, setting := range []struct {
+		row string
+		key string
+	}{
+		{ansi.Strip(m.renderThemePickerAccentSetting()), "A"},
+		{ansi.Strip(m.renderThemePickerBackgroundSetting()), "B"},
+	} {
+		if renderedTextRegionHit(rendered, msg.X, msg.Y, setting.row, 0, 0) {
+			return m.handleThemeKeys(keyMessage(setting.key))
+		}
 	}
 	for index, name := range ThemeNames() {
 		theme, _ := LookupTheme(name)
@@ -356,19 +365,21 @@ func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Mo
 			return m, nil
 		}
 	}
+	// The cycle labels grow a Custom position at runtime, so they are taken from
+	// the same helpers the footer renders rather than repeated as literals.
+	accentLabel := m.themeAccentControlLabel()
+	accentKey := "a"
+	if !strings.HasPrefix(accentLabel, "[a]") {
+		accentKey = "A"
+	}
 	bindings := []mouseKeyBinding{
 		{label: "[p] Theme: Project / Selected", key: "p"},
-	}
-	if strings.TrimSpace(m.cfg.UI.Accent) == "" {
-		bindings = append(bindings, mouseKeyBinding{label: "[a/Shift+A] Accent: Edit color", key: "A"})
-	} else {
-		bindings = append(bindings,
-			mouseKeyBinding{label: "[a] Accent: Project / Theme default", key: "a"},
-			mouseKeyBinding{label: "[Shift+A] Edit color", key: "A"},
-		)
+		{label: accentLabel, key: accentKey},
+		{label: "[Shift+A] Edit color", key: "A"},
+		{label: m.themeBackgroundControlLabel(), key: "b"},
+		{label: "[Shift+B] Edit color", key: "B"},
 	}
 	bindings = append(bindings,
-		mouseKeyBinding{label: "[b] Background: Terminal / Theme", key: "b"},
 		mouseKeyBinding{label: "[m] Mode: Auto / Dark / Light", key: "m"},
 		mouseKeyBinding{label: "[Enter] Apply", key: "enter"},
 		mouseKeyBinding{label: "[r] Reload saved", key: "r"},

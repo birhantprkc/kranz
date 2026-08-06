@@ -344,6 +344,9 @@ Background ownership is independent from color mode:
   terminal profile supplies its exact background.
 - `ui.background: theme` paints the selected theme's current light or dark
   surface.
+- `ui.background: "#RRGGBB"` paints a canvas of your own. The rest of the
+  palette is re-derived from it, and its lightness decides the readable text
+  set, so `color_mode` no longer selects the canvas.
 
 For example, `theme: cream` with `background: theme` and `color_mode: auto`
 paints warm cream in a light terminal and the theme's dark warm-brown variant in
@@ -357,13 +360,19 @@ appearance controls are independent:
 | Key | Action |
 |---|---|
 | `p` | Project theme / selected theme |
-| `a` | Project accent / theme-default accent; opens the editor when no project accent exists |
-| `Shift+A` | Edit the current accent color |
-| `b` | Terminal / theme background ownership |
+| `a` | Cycle the accent sources that exist: project accent, theme default, and a custom color once one is set; opens the editor when there is nothing to cycle |
+| `Shift+A` | Edit the accent color |
+| `b` | Cycle the canvas: terminal, theme, and a custom color once one is set |
+| `Shift+B` | Edit the canvas color |
 | `m` | Auto / Dark / Light |
 
-The accent editor keeps the leading `#` fixed and accepts the six hexadecimal
-digits that follow it. The first typed value or pasted `#RRGGBB` replaces the
+Both color editors keep the leading `#` fixed and accept the six hexadecimal
+digits that follow it. A typed color becomes a source of its own and stays in
+the `a` or `b` cycle, so moving off it does not throw it away. A custom canvas
+color is painted by Kranz rather than inherited from the terminal, and the rest
+of the palette — elevated surfaces, status colors, and text contrast — is
+re-derived from it, so `ui.background` accepts `#RRGGBB` alongside `terminal`
+and `theme`. The first typed value or pasted `#RRGGBB` replaces the
 current value; cursor keys, Backspace, Delete, Home, and End allow precise
 edits. Once all six digits are valid, the field, swatch, and preview card show
 the candidate color immediately. `Enter` applies it and returns to the picker,

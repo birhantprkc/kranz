@@ -130,11 +130,11 @@ func TestThemeAdaptsToDetectedTerminalBackground(t *testing.T) {
 func TestThemeVariantsCanPaintLightAndDarkCanvases(t *testing.T) {
 	restoreDefaultTheme(t)
 	for _, name := range ThemeNames() {
-		dark, err := ApplyThemeVariant(name, "", true, false)
+		dark, err := ApplyThemeVariant(name, "", "", true, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		light, err := ApplyThemeVariant(name, "", false, false)
+		light, err := ApplyThemeVariant(name, "", "", false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +232,7 @@ func TestThemeStylesPanelTitlesAsSurfaceLabels(t *testing.T) {
 
 func TestLightThemeFocusUsesVeryPaleProjectAccent(t *testing.T) {
 	restoreDefaultTheme(t)
-	theme, err := ApplyThemeVariant("forest", "#2AB630", false, true)
+	theme, err := ApplyThemeVariant("forest", "#2AB630", "", false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
