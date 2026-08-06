@@ -590,9 +590,11 @@ Details and the health-history view show the resolved TCP or HTTP endpoint, not
 the selector syntax. Only a port inserted from runtime discovery is highlighted;
 a static port that was already part of the configured target remains ordinary
 text. Before the first listener is detected, Kranz keeps the target recognizable
-by rendering the unresolved slot in place, for example
-`http://localhost:[DETECTING]/health` or `tcp://localhost:[DETECTING]`. Once a
-snapshot arrives, `[DETECTING]` is replaced by the highlighted number. An
+by rendering the unresolved slot in place. A running service that has not
+reported a listener yet shows `http://localhost:[DETECTING]/health` or
+`tcp://localhost:[DETECTING]`; a stopped service has nothing to detect and shows
+`[PORT]` instead, so a dynamic target is never mistaken for a stalled probe.
+Once a snapshot arrives, the marker is replaced by the highlighted number. An
 ambiguous detected set remains an explicit error instead of being guessed.
 
 ### Details panel

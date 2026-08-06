@@ -199,22 +199,25 @@ type Model struct {
 	settingsBefore      usersettings.Settings
 	themeCursor         int
 	themeUseProject     bool
-	themeProjectAccent  bool
 	themeBackground     string
 	themeColorMode      string
-	themeAccentChanged  bool
-	themeOriginalAccent string
-	themeCustomAccent   string
-	themeAccentInput    textinput.Model
-	themeAccentEditing  bool
-	themeAccentReplace  bool
-	themeAccentError    string
-	configPaths         []string
-	configWatchPaths    []string
-	configStamps        map[string]configStamp
-	lastConfigScan      time.Time
-	reloadBusy          bool
-	projectExitHandled  bool
+	// themeAccentSource is the single answer to "where does the accent come
+	// from"; themeCustomAccent carries the value only for the custom source.
+	// themeAccentChanged is a separate axis — whether the user touched the
+	// accent this session — and decides whether to write the user settings.
+	themeAccentSource  themeAccentSource
+	themeCustomAccent  string
+	themeAccentChanged bool
+	themeAccentInput   textinput.Model
+	themeAccentEditing bool
+	themeAccentReplace bool
+	themeAccentError   string
+	configPaths        []string
+	configWatchPaths   []string
+	configStamps       map[string]configStamp
+	lastConfigScan     time.Time
+	reloadBusy         bool
+	projectExitHandled bool
 
 	shutdownOnce sync.Once
 	shutdownErr  error

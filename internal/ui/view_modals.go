@@ -323,16 +323,21 @@ func (m *Model) renderThemeView() string {
 		previewTheme.Accent = candidate
 		previewTheme = normalizeTheme(previewTheme)
 	}
-	previewCard := renderThemePreviewCard(previewTheme)
 	// Keep the controls visible even in a 24-row terminal. The fixed rows are
-	// the summary, footer, modal border/padding, path separator, and paths. The
-	// remaining rows are shared by the theme table and its side preview.
+	// the six-row settings summary, the five-row footer, the modal border and
+	// padding, the path separator, and the paths themselves. The remaining rows
+	// are shared by the theme table and its side preview.
 	pathSeparatorRows := 0
 	if len(pathLines) > 0 {
 		pathSeparatorRows = 1
 	}
-	fixedRows := 6 + 6 + 4 + pathSeparatorRows + len(pathLines)
+	fixedRows := 6 + 5 + 4 + pathSeparatorRows + len(pathLines)
 	sectionRows := max(2, m.height-fixedRows)
+	// The side preview is a fixed-height panel, and JoinHorizontal stretches the
+	// whole section to the taller side. Showing it in a section that cannot hold
+	// it would push the footer and the config paths off the bottom of the modal,
+	// so a short terminal keeps the theme table alone.
+	showPreview := m.width >= themePreviewMinWidth && sectionRows >= themePreviewCardRows
 	themeCapacity := max(1, sectionRows-1) // ATMB header
 	showPosition := len(names) > themeCapacity && sectionRows >= 3
 	visibleRows := min(len(names), themeCapacity)
@@ -353,7 +358,9 @@ func (m *Model) renderThemeView() string {
 		"  " + renderThemeSetting("Background", m.themePickerBackgroundLabel()),
 		"  " + renderThemeSetting("Mode", m.themePickerColorModeLabel()),
 	}
-	themeLines := []string{"  " + strings.Repeat(" ", 22) + ContextBarStyle.Render("A T M B")}
+	// The header aligns with the palette column: the row indent plus the marker
+	// plus the padded name width.
+	themeLines := []string{"  " + strings.Repeat(" ", themeRowMarkerWidth+themeRowNameWidth) + ContextBarStyle.Render("A T M B")}
 	for index := start; index < start+visibleRows; index++ {
 		theme, _ := LookupTheme(names[index])
 		theme = adaptThemeBackground(theme, colorModeIsDark(m.themeColorMode, m.terminalDark))
@@ -362,7 +369,7 @@ func (m *Model) renderThemeView() string {
 			marker = "› "
 		}
 		name := themeNameStyle(theme).Render(theme.DisplayName)
-		line := marker + name + strings.Repeat(" ", max(1, 20-lipgloss.Width(theme.DisplayName))) + themePalettePreview(theme)
+		line := marker + name + strings.Repeat(" ", themeRowNamePadding(theme)) + themePalettePreview(theme, m.activeTheme.SurfaceAlt)
 		if index == m.themeCursor {
 			line = renderSelectedLine(line)
 		}
@@ -372,8 +379,8 @@ func (m *Model) renderThemeView() string {
 		themeLines = append(themeLines, "  "+ContextBarStyle.Render(fmt.Sprintf("%d/%d", m.themeCursor+1, len(names))))
 	}
 	themeSection := strings.Join(themeLines, "\n")
-	if m.width >= 78 {
-		themeSection = lipgloss.JoinHorizontal(lipgloss.Top, themeSection, "   ", previewCard)
+	if showPreview {
+		themeSection = lipgloss.JoinHorizontal(lipgloss.Top, themeSection, "   ", renderThemePreviewCard(previewTheme))
 	}
 	lines = append(lines, themeSection, "")
 	lines = append(lines,
@@ -390,9 +397,34 @@ func (m *Model) renderThemeView() string {
 	return m.placeOverlay(renderFlushModal(strings.Join(lines, "\n")))
 }
 
-func themePalettePreview(theme Theme) string {
+const (
+	// Layout of one theme row: "› " marker, the display name padded to a fixed
+	// column, then the A/T/M/B palette. renderThemeView draws it and
+	// handleThemeMouseClick sizes its hit target from the same numbers.
+	themeRowMarkerWidth = 2
+	themeRowNameWidth   = 20
+	// The side preview is renderTitledPanel(height: 4): a titled top border,
+	// four content rows, and a bottom border. Both dimensions gate it — the
+	// narrowest terminal that fits the table and the card side by side, and the
+	// shortest section that can hold the card without stealing rows from the
+	// footer below it.
+	themePreviewCardRows = 6
+	themePreviewMinWidth = 78
+)
+
+// themeRowNamePadding reports the spaces between a theme's display name and the
+// palette column, keeping at least one space when the name overflows.
+func themeRowNamePadding(theme Theme) int {
+	return max(1, themeRowNameWidth-lipgloss.Width(theme.DisplayName))
+}
+
+// themePalettePreview renders a theme's accent, text, muted, and background
+// colours as dots. They are drawn over the active theme's modal surface rather
+// than their own, so each dot needs a contrast floor of its own: without it a
+// dark theme's background dot is invisible on a dark modal.
+func themePalettePreview(theme Theme, surface string) string {
 	dot := func(color string) string {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render("●")
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(ensureContrast(color, surface, 3.0))).Bold(true).Render("●")
 	}
 	return strings.Join([]string{
 		dot(theme.Accent),
@@ -580,16 +612,14 @@ func (m *Model) themePickerThemeLabel(projectTheme string) string {
 }
 
 func (m *Model) themePickerAccentLabel() string {
-	if m.themeCustomAccent != "" {
-		return "CUSTOM · " + m.themeCustomAccent
+	switch m.themeAccentSource {
+	case themeAccentSourceCustom:
+		return "CUSTOM · " + m.themePickerAccent()
+	case themeAccentSourceProject:
+		return "PROJECT · " + m.themePickerAccent()
+	default:
+		return "THEME DEFAULT"
 	}
-	if !m.themeAccentChanged && isCustomAccent(m.themeOriginalAccent, m.cfg.UI.Accent) {
-		return "CUSTOM · " + m.themeOriginalAccent
-	}
-	if m.themeProjectAccent {
-		return "PROJECT · " + strings.TrimSpace(m.cfg.UI.Accent)
-	}
-	return "THEME DEFAULT"
 }
 
 func (m *Model) themePickerBackgroundLabel() string {

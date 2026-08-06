@@ -346,8 +346,10 @@ func (m *Model) handleThemeMouseClick(rendered string, msg tea.MouseMsg) (tea.Mo
 	}
 	for index, name := range ThemeNames() {
 		theme, _ := LookupTheme(name)
-		rightCells := max(1, 20-lipgloss.Width(theme.DisplayName)) + lipgloss.Width(themePalettePreview(theme))
-		if renderedTextRegionHit(rendered, msg.X, msg.Y, theme.DisplayName, 2, rightCells) {
+		// Extend the hit target across the whole row that renderThemeView draws:
+		// the marker on the left, then the padding and the palette on the right.
+		rightCells := themeRowNamePadding(theme) + lipgloss.Width(themePalettePreview(theme, m.activeTheme.SurfaceAlt))
+		if renderedTextRegionHit(rendered, msg.X, msg.Y, theme.DisplayName, themeRowMarkerWidth, rightCells) {
 			m.themeCursor = index
 			m.themeUseProject = false
 			m.previewThemePicker()

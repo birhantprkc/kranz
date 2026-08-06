@@ -227,8 +227,8 @@ func TestThemePickerAAppliesProjectAccentToSelectedTheme(t *testing.T) {
 		}
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if !model.themeProjectAccent || model.activeTheme.Accent != "#2AB630" {
-		t.Fatalf("project accent was not previewed: toggle=%v theme=%q", model.themeProjectAccent, model.activeTheme.Accent)
+	if model.themeAccentSource != themeAccentSourceProject || model.activeTheme.Accent != "#2AB630" {
+		t.Fatalf("project accent was not previewed: source=%v theme=%q", model.themeAccentSource, model.activeTheme.Accent)
 	}
 	if model.activeTheme.Name != "github-light" {
 		t.Fatalf("selected theme changed to %q", model.activeTheme.Name)
@@ -247,8 +247,8 @@ func TestThemePickerUsesClearProjectAndAccentToggles(t *testing.T) {
 	defer model.Shutdown()
 	model.width, model.height, model.ready = 110, 32, true
 	model.openThemePicker()
-	if !model.themeUseProject || !model.themeProjectAccent {
-		t.Fatalf("initial picker modes = project %v accent %v", model.themeUseProject, model.themeProjectAccent)
+	if !model.themeUseProject || model.themeAccentSource != themeAccentSourceProject {
+		t.Fatalf("initial picker modes = project %v accent %v", model.themeUseProject, model.themeAccentSource)
 	}
 	pressKey(model, 'p')
 	if model.themeUseProject {
@@ -259,7 +259,7 @@ func TestThemePickerUsesClearProjectAndAccentToggles(t *testing.T) {
 		t.Fatal("p did not switch back to project theme")
 	}
 	pressKey(model, 'a')
-	if model.themeProjectAccent {
+	if model.themeAccentSource != themeAccentSourceTheme {
 		t.Fatal("a did not switch to the theme accent")
 	}
 	plain := ansi.Strip(model.renderThemeView())
@@ -442,7 +442,7 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 		t.Fatalf("project toggle click = project %v / %s", model.themeUseProject, model.activeTheme.Name)
 	}
 	clickRenderedText(t, model, "[a] Accent: Project / Theme default")
-	if model.themeProjectAccent {
+	if model.themeAccentSource != themeAccentSourceTheme {
 		t.Fatal("accent toggle click did not select the theme default")
 	}
 	clickRenderedText(t, model, "[b] Background: Terminal / Theme")
@@ -490,7 +490,7 @@ func TestThemePickerRowIsClickableOutsideItsName(t *testing.T) {
 		if !ok {
 			t.Fatal("github-light theme not found")
 		}
-		x := lipgloss.Width(line[:nameStart]) + 20 + lipgloss.Width(themePalettePreview(theme)) - 1
+		x := lipgloss.Width(line[:nameStart]) + themeRowNameWidth + lipgloss.Width(themePalettePreview(theme, model.activeTheme.SurfaceAlt)) - 1
 		_, _ = model.handleMouseMsg(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 		if model.themeUseProject || model.activeTheme.Name != "github-light" {
 			t.Fatalf("palette click = project %v / %s", model.themeUseProject, model.activeTheme.Name)
@@ -509,7 +509,7 @@ func TestThemePickerUsesThemeIdentityColorsEvenWithProjectAccent(t *testing.T) {
 	model.width, model.height, model.ready = 110, 32, true
 	model.openThemePicker()
 	model.themeUseProject = false
-	model.themeProjectAccent = true
+	model.themeAccentSource = themeAccentSourceProject
 
 	theme, ok := LookupTheme("dracula")
 	if !ok {
@@ -527,7 +527,7 @@ func TestThemePickerUsesThemeIdentityColorsEvenWithProjectAccent(t *testing.T) {
 		t.Fatalf("theme setting does not use Dracula identity color: %q", setting)
 	}
 
-	preview := themePalettePreview(theme)
+	preview := themePalettePreview(theme, model.activeTheme.SurfaceAlt)
 	plainPreview := ansi.Strip(preview)
 	if plainPreview != "● ● ● ●" {
 		t.Fatalf("palette preview = %q", plainPreview)
@@ -631,6 +631,48 @@ func TestThemeAccentEditorSavesCustomColorToProject(t *testing.T) {
 	if saved.UI.Accent != "#445566" || model.mode != ModeNormal {
 		t.Fatalf("saved custom accent = %q / mode %v", saved.UI.Accent, model.mode)
 	}
+	// The colour now belongs to the project, so the picker must stop calling it
+	// a custom one when it reopens.
+	if model.themeAccentSource != themeAccentSourceProject || model.themeCustomAccent != "" {
+		t.Fatalf("accent stayed custom after the project save: source=%v custom=%q",
+			model.themeAccentSource, model.themeCustomAccent)
+	}
+	if label := model.themePickerAccentLabel(); label != "PROJECT · #445566" {
+		t.Fatalf("accent label after project save = %q", label)
+	}
+}
+
+// A personal accent that overrides a project accent is one source, not two. The
+// picker used to record both at once and let each reader break the tie itself.
+func TestThemePickerCustomAccentOverridesProjectAccentAsOneSource(t *testing.T) {
+	model := NewModelWithOptions(&config.Config{
+		Project: "Both", UI: config.UIConfig{Theme: "forest", Accent: "#00AAFF"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{Settings: usersettings.Settings{Accent: "#FF0000"}})
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	if model.themeAccentSource != themeAccentSourceCustom {
+		t.Fatalf("personal accent over a project accent = source %v", model.themeAccentSource)
+	}
+	if got := model.themePickerAccent(); got != "#FF0000" {
+		t.Fatalf("resolved accent = %q", got)
+	}
+	if label, summary := model.themePickerAccentLabel(), model.themePickerSummary(); label != "CUSTOM · #FF0000" || !strings.Contains(summary, label) {
+		t.Fatalf("label %q / summary %q", label, summary)
+	}
+
+	// The toggle walks the two remaining sources without resurrecting the custom.
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if model.themeAccentSource != themeAccentSourceProject || model.themeCustomAccent != "" || model.themePickerAccent() != "#00AAFF" {
+		t.Fatalf("first toggle = source %v / custom %q / accent %q",
+			model.themeAccentSource, model.themeCustomAccent, model.themePickerAccent())
+	}
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if model.themeAccentSource != themeAccentSourceTheme || model.themePickerAccent() != "" {
+		t.Fatalf("second toggle = source %v / accent %q", model.themeAccentSource, model.themePickerAccent())
+	}
 }
 
 func TestLightTerminalUsesCohesiveAdaptiveCanvas(t *testing.T) {
@@ -720,5 +762,135 @@ func assertFrameRestoresCanvasBackground(t *testing.T, frame string) {
 			t.Fatalf("nested reset at byte %d exposes terminal background; next bytes %q", resetEnd-len(reset), frame[resetEnd:min(len(frame), resetEnd+len(backgroundPrefix)+12)])
 		}
 		offset = resetEnd
+	}
+}
+
+// The side preview is a fixed-height panel joined next to the theme table, so a
+// wider terminal must never buy the preview by pushing the footer or the config
+// paths off the bottom of the modal.
+func TestThemePickerPreviewNeverCostsControls(t *testing.T) {
+	render := func(width, height int) string {
+		model := NewModel(&config.Config{
+			Project: "Compact", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
+			Services: map[string]config.Service{"app": {Command: "exit 0"}},
+		}, "test")
+		defer model.Shutdown()
+		model.width, model.height, model.ready = width, height, true
+		model.settingsPath = "/tmp/settings.yaml"
+		model.configPaths = []string{"/tmp/kranz.yaml"}
+		model.openThemePicker()
+		return ansi.Strip(model.renderThemeView())
+	}
+
+	controls := []string{"[m] Mode", "[c] Project", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"}
+	for _, height := range []int{18, 20, 22, 24, 30} {
+		narrow := render(themePreviewMinWidth-1, height)
+		wide := render(themePreviewMinWidth+22, height)
+		for _, control := range controls {
+			if strings.Contains(narrow, control) && !strings.Contains(wide, control) {
+				t.Errorf("at %d rows the preview card hid %q that fits without it:\n%s", height, control, wide)
+			}
+		}
+	}
+}
+
+// A committed custom accent must be named by the confirmation notification, not
+// just by the picker panel.
+func TestThemePickerSummaryNamesCustomAccent(t *testing.T) {
+	model := NewModel(&config.Config{
+		Project: "Custom", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test")
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("FF0000")})
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
+
+	summary := model.themePickerSummary()
+	if !strings.Contains(summary, "CUSTOM · #FF0000") {
+		t.Fatalf("summary does not name the custom accent: %q", summary)
+	}
+	if label := model.themePickerAccentLabel(); !strings.Contains(summary, label) {
+		t.Fatalf("summary %q disagrees with the picker label %q", summary, label)
+	}
+}
+
+// Palette dots are drawn over the active theme's modal surface, not their own,
+// so a dot whose colour equals that surface has to be lifted off it. The
+// background dot on a modal painted by the same theme is the worst case.
+func TestThemePaletteDotsStayVisibleOnTheModalSurface(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+
+	for _, name := range ThemeNames() {
+		theme, ok := LookupTheme(name)
+		if !ok {
+			t.Fatalf("theme %q not found", name)
+		}
+		for _, surface := range []string{theme.Background, theme.Accent} {
+			invisible := lipgloss.NewStyle().Foreground(lipgloss.Color(surface)).Bold(true).Render("●")
+			if rendered := themePalettePreview(theme, surface); strings.Contains(rendered, invisible) {
+				t.Errorf("%s palette draws a dot in the surface colour %s: %q", name, surface, ansi.Strip(rendered))
+			}
+		}
+	}
+}
+
+// A config reload can land while the theme picker is open — pressing r makes it
+// near-certain, because reloading the saved appearance leaves the watcher's
+// stamps stale. The reload must rebuild the live preview rather than recompute
+// the appearance from the config and the saved settings, which would drop every
+// uncommitted choice while the panel kept reporting it.
+func TestThemePickerSurvivesConfigReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kranz.yaml")
+	data := "project: Reload\nui:\n  theme: forest\n  accent: '#2AB630'\nservices:\n  app:\n    command: exit 0\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewModelWithOptions(cfg, "test", ModelOptions{
+		SettingsPath: filepath.Join(dir, "settings.yaml"),
+		ConfigPaths:  []string{path},
+	})
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	model.openThemePicker()
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("FF0000")})
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	if model.activeTheme.Accent != "#FF0000" || model.themeBackground != backgroundTheme || model.themeColorMode != colorModeDark {
+		t.Fatalf("picker state before reload = accent %q / background %q / mode %q",
+			model.activeTheme.Accent, model.themeBackground, model.themeColorMode)
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = model.Update(configReloadMsg{cfg: reloaded, changed: true})
+
+	if model.activeTheme.Accent != "#FF0000" {
+		t.Errorf("reload reverted the typed accent to %q while the panel still shows %q",
+			model.activeTheme.Accent, model.themePickerAccentLabel())
+	}
+	if model.themeBackground != backgroundTheme || model.themeColorMode != colorModeDark {
+		t.Errorf("reload dropped background/mode choices = %q / %q", model.themeBackground, model.themeColorMode)
+	}
+
+	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
+	if model.activeTheme.Accent != "#FF0000" || model.userSettings.Accent != "#FF0000" {
+		t.Fatalf("applied appearance = active %q / settings %q", model.activeTheme.Accent, model.userSettings.Accent)
 	}
 }
