@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -892,5 +893,47 @@ func TestThemePickerSurvivesConfigReload(t *testing.T) {
 	_, _ = model.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEnter})
 	if model.activeTheme.Accent != "#FF0000" || model.userSettings.Accent != "#FF0000" {
 		t.Fatalf("applied appearance = active %q / settings %q", model.activeTheme.Accent, model.userSettings.Accent)
+	}
+}
+
+// lipgloss paints border cells only through BorderBackground; Background alone
+// leaves them transparent and the canvas shows through as a one-cell seam
+// around every dialog, because modals sit on SurfaceAlt rather than the canvas.
+func TestModalBordersShareTheModalSurface(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+
+	model := NewModelWithOptions(&config.Config{
+		Project: "Painted", UI: config.UIConfig{Theme: "forest", Background: backgroundTheme},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{Settings: usersettings.Settings{Background: backgroundTheme}})
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 110, 32, true
+	if TerminalCanvas {
+		t.Fatal("the theme is expected to paint the canvas for this test")
+	}
+
+	surface, ok := parseHex(model.activeTheme.SurfaceAlt)
+	if !ok {
+		t.Fatalf("modal surface %q is not a hex value", model.activeTheme.SurfaceAlt)
+	}
+	surfaceSequence := fmt.Sprintf("48;2;%d;%d;%d", int(surface[0]), int(surface[1]), int(surface[2]))
+
+	for name, rendered := range map[string]string{
+		"confirmation": renderConfirmationModal("Quit Kranz?", []string{"body"}, "[Enter/y] Yes", "[Esc/n] No"),
+		"plain modal":  renderModal("body"),
+		"flush modal":  renderFlushModal("body"),
+	} {
+		for index, line := range strings.Split(rendered, "\n") {
+			if !strings.ContainsAny(ansi.Strip(line), "\u256d\u2570\u2502") {
+				continue
+			}
+			if !strings.Contains(line, surfaceSequence) {
+				t.Errorf("%s row %d draws its border without the modal surface %s, leaving a canvas seam:\n%q",
+					name, index, model.activeTheme.SurfaceAlt, line)
+			}
+		}
 	}
 }

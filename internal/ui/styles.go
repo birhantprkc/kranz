@@ -95,7 +95,12 @@ func applyPalette(theme Theme) {
 	if !TerminalCanvas {
 		AppStyle = AppStyle.Background(ColorBackground)
 		HeaderStyle = HeaderStyle.Background(ColorBackground)
-		PanelStyle = PanelStyle.Background(ColorDarkBg)
+		// Border cells are painted only by BorderBackground; Background alone
+		// leaves them transparent and the canvas shows through. For panels that
+		// is invisible today because normalizeTheme keeps Surface equal to
+		// Background, but stating it keeps the panel one solid card if those
+		// ever diverge.
+		PanelStyle = PanelStyle.Background(ColorDarkBg).BorderBackground(ColorDarkBg)
 	}
 	FocusedPanelStyle = PanelStyle.BorderForeground(ColorCyan)
 	// Border colour only: a text attribute here would propagate to the whole
@@ -139,7 +144,10 @@ func applyPalette(theme Theme) {
 	StoppedBadgeStyle = lipgloss.NewStyle().Foreground(ColorStopped)
 	FailedBadgeStyle = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
 	if !TerminalCanvas {
-		ModalStyle = ModalStyle.Background(ColorSurfaceAlt)
+		// Modals and confirmations sit on SurfaceAlt, a colour the canvas does
+		// not share, so an unpainted border leaves a one-cell seam of canvas
+		// around every dialog.
+		ModalStyle = ModalStyle.Background(ColorSurfaceAlt).BorderBackground(ColorSurfaceAlt)
 		ModalTitleStyle = ModalTitleStyle.Background(ColorSurfaceAlt)
 	}
 }
