@@ -1155,6 +1155,52 @@ func atoi(t *testing.T, value string) int {
 	return number
 }
 
+// A colour that was entered — in the project config or typed into the picker —
+// is rendered exactly as entered, with no contrast correction of its own.
+func TestEnteredColoursAreUsedVerbatim(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
+
+	// Deliberately awkward colours: every one of these used to be shifted.
+	for _, accent := range []string{"#0969DA", "#B91C1C", "#155E29", "#2AB630", "#FF8800"} {
+		theme, err := BuildTheme("forest", accent, "", true)
+		if err != nil {
+			t.Fatalf("%s: %v", accent, err)
+		}
+		if theme.Accent != accent || theme.AccentText != accent {
+			t.Errorf("accent %s came back as %s / %s", accent, theme.Accent, theme.AccentText)
+		}
+	}
+
+	for _, background := range []string{"#204060", "#0A0A0A", "#FAFAFA"} {
+		theme, err := BuildTheme("forest", "#B91C1C", background, true)
+		if err != nil {
+			t.Fatalf("%s: %v", background, err)
+		}
+		if theme.Background != background || theme.Surface != background {
+			t.Errorf("background %s came back as %s / %s", background, theme.Background, theme.Surface)
+		}
+		if theme.Accent != "#B91C1C" {
+			t.Errorf("background %s disturbed the accent: %s", background, theme.Accent)
+		}
+	}
+
+	// The installed styles carry the entered colour, not a corrected variant.
+	model := NewModelWithOptions(&config.Config{
+		Project: "Deep", UI: config.UIConfig{Theme: "forest", Accent: "#B91C1C", Background: backgroundTheme},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{Settings: usersettings.Settings{Background: backgroundTheme}})
+	defer model.Shutdown()
+	if got := fmt.Sprint(ModalStyle.GetBorderTopForeground()); got != "#B91C1C" {
+		t.Errorf("modal border = %s, want the entered accent #B91C1C", got)
+	}
+	if got := fmt.Sprint(FocusedPanelStyle.GetBorderTopForeground()); got != "#B91C1C" {
+		t.Errorf("focused panel border = %s, want the entered accent #B91C1C", got)
+	}
+}
+
 // Typing a colour adds a Custom position to the a and b labels. The key-hint
 // column reserves room for it up front, because sizing to the current labels
 // made the modal jump nine columns wider the moment a custom colour appeared.

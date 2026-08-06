@@ -111,8 +111,10 @@ func TestThemeAdaptsToDetectedTerminalBackground(t *testing.T) {
 	if light.Green != "#16A34A" || light.Yellow != "#EAB308" || light.Red != "#EF4444" {
 		t.Fatalf("light semantic indicators were theme-shifted: %#v", light)
 	}
-	if ratio := contrastRatio(light.AccentText, light.Surface); ratio < 4.5 {
-		t.Errorf("light accent text contrast = %.2f", ratio)
+	// An entered accent is rendered as entered, even when adapting the theme to a
+	// light terminal would otherwise have lightened it.
+	if light.AccentText != "#2AB630" {
+		t.Errorf("light accent text = %s, want the entered #2AB630", light.AccentText)
 	}
 
 	dark, err := ApplyThemeForBackground("forest", "#4A8C6F", true)

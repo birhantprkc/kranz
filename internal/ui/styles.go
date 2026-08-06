@@ -68,8 +68,10 @@ func applyPalette(theme Theme) {
 	ColorYellow = lipgloss.Color(theme.Yellow)
 	ColorRed = lipgloss.Color(theme.Red)
 	ColorGrey = lipgloss.Color(theme.Text)
-	// Keep the configured accent intact for persistence, but render its
-	// contrast-corrected variant on borders and other foreground-only roles.
+	// Keep the configured accent intact for persistence and use AccentText in
+	// foreground-only roles such as borders. normalizeTheme decides what that
+	// is: an entered accent verbatim, a theme's own accent with a contrast
+	// floor.
 	ColorCyan = lipgloss.Color(theme.AccentText)
 	ColorAccentText = lipgloss.Color(theme.AccentText)
 	ColorInfo = lipgloss.Color(theme.Info)

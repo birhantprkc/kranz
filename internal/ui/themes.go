@@ -30,6 +30,9 @@ type Theme struct {
 	Data        string
 	Selection   string
 	SelectText  string
+	// AccentPinned marks an accent that was entered rather than shipped with the
+	// theme, either in the project config or through the picker's editor.
+	AccentPinned bool
 	// TerminalCanvas leaves the base canvas unpainted so the terminal profile
 	// supplies its exact background color. Derived colors still use Background
 	// as a light/dark contrast reference.
@@ -101,7 +104,17 @@ func normalizeTheme(theme Theme) Theme {
 		theme.SurfaceAlt = mixHex(theme.Background, theme.Text, 0.07)
 	}
 	theme.Green, theme.Yellow, theme.Red = semanticStatusColors(theme.Background)
-	theme.AccentText = ensureContrast(theme.Accent, theme.Surface, 4.5)
+	// An entered accent is a deliberate choice, so it is rendered exactly as
+	// given — in text roles and on borders alike. Correcting it would hand back a
+	// different colour than the one that was typed, and choosing an unreadable
+	// one is the user's call. A theme's own accent is not a choice the user made,
+	// and Kranz may have just adapted that theme to the opposite light/dark
+	// canvas, so those keep their contrast floor.
+	if theme.AccentPinned {
+		theme.AccentText = theme.Accent
+	} else {
+		theme.AccentText = ensureContrast(theme.Accent, theme.Surface, 4.5)
+	}
 	if theme.Info == "" {
 		theme.Info = adaptiveInfoColor(theme.Background)
 	}
@@ -260,6 +273,7 @@ func resolveTheme(name, accent string) (Theme, error) {
 		return Theme{}, fmt.Errorf("accent must use #RRGGBB format, got %q", accent)
 	}
 	theme.Accent = strings.ToUpper(accent)
+	theme.AccentPinned = true
 	return theme, nil
 }
 
