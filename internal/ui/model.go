@@ -100,6 +100,8 @@ type releasePortResultMsg struct {
 }
 type tickMsg time.Time
 
+const mouseTrackingRefreshInterval = 250 * time.Millisecond
+
 type configStamp struct {
 	Modified int64
 	Size     int64
@@ -195,6 +197,7 @@ type Model struct {
 	terminalDark        bool
 	backgroundProbeBusy bool
 	lastBackgroundProbe time.Time
+	lastMouseRefresh    time.Time
 	systemAppearanceSet bool
 	systemDark          bool
 	themeBefore         Theme
@@ -330,6 +333,18 @@ func (m *Model) pollServices() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+func (m *Model) enableMouseTracking(now time.Time) tea.Cmd {
+	m.lastMouseRefresh = now
+	return tea.EnableMouseCellMotion
+}
+
+func (m *Model) refreshMouseTracking(now time.Time) tea.Cmd {
+	if !m.lastMouseRefresh.IsZero() && now.Sub(m.lastMouseRefresh) < mouseTrackingRefreshInterval {
+		return nil
+	}
+	return m.enableMouseTracking(now)
+}
+
 // RequestedExitCode returns the exit code requested by an availability policy.
 func (m *Model) RequestedExitCode() int {
 	requested, code := m.manager.ProjectExitRequested()
@@ -348,16 +363,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.scanFocusedPorts(false)
 	case tea.FocusMsg:
 		// Some terminals (observed with Zed's integrated terminal) drop mouse
-		// tracking mode when a tab loses and regains focus, since it is only
-		// ever enabled once at startup. Re-assert it defensively on every
-		// focus-in so clicks keep working after switching tabs and back.
+		// tracking mode when a tab or macOS workspace loses and regains focus.
+		// Re-assert it immediately; the tick watchdog below also recovers when
+		// the terminal drops the focus event itself.
 		var searchCommand tea.Cmd
 		if m.mode == ModeSearch {
 			m.searchInput, searchCommand = m.searchInput.Update(msg)
 		} else if m.mode == ModeThemes && m.themeColorEditing {
 			m.themeColorInput, searchCommand = m.themeColorInput.Update(msg)
 		}
-		return m, tea.Batch(tea.EnableMouseCellMotion, m.probeTerminalBackground(false), searchCommand)
+		return m, tea.Batch(m.enableMouseTracking(time.Now()), m.probeTerminalBackground(false), searchCommand)
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 	case tea.MouseMsg:
@@ -423,13 +438,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tickMsg:
+		now := time.Time(msg)
 		m.refreshServices()
 		m.expireToast()
 		if requested, _ := m.manager.ProjectExitRequested(); requested && !m.projectExitHandled {
 			m.projectExitHandled = true
 			return m.beginShutdown()
 		}
-		return m, tea.Batch(m.pollServices(), m.scanFocusedPorts(false), m.reloadConfig(false))
+		return m, tea.Batch(
+			m.pollServices(),
+			m.scanFocusedPorts(false),
+			m.reloadConfig(false),
+			m.refreshMouseTracking(now),
+		)
 	case searchNudgeMsg:
 		// Ignore a chain left over from an earlier click.
 		if !time.Time(msg).Equal(m.searchNudge) {
