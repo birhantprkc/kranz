@@ -372,7 +372,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.mode == ModeThemes && m.themeColorEditing {
 			m.themeColorInput, searchCommand = m.themeColorInput.Update(msg)
 		}
-		return m, tea.Batch(m.enableMouseTracking(time.Now()), m.probeTerminalBackground(false), searchCommand)
+		return m, tea.Batch(m.enableMouseTracking(time.Now()), searchCommand)
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 	case tea.MouseMsg:

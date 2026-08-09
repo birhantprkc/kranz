@@ -122,14 +122,17 @@ func TestForcedColorModeIgnoresDetectedAppearanceChanges(t *testing.T) {
 	}
 }
 
-func TestFocusSchedulesFreshTerminalBackgroundProbe(t *testing.T) {
+func TestFocusDoesNotSuspendTerminalForBackgroundProbe(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	model := newTestModel()
 	defer model.Shutdown()
 	model.lastBackgroundProbe = time.Now().Add(-2 * time.Second)
 
 	_, command := model.Update(tea.FocusMsg{})
-	if command == nil || !model.backgroundProbeBusy {
-		t.Fatal("focus did not schedule a terminal background probe")
+	if command == nil {
+		t.Fatal("focus did not schedule mouse tracking recovery")
+	}
+	if model.backgroundProbeBusy {
+		t.Fatal("focus scheduled a terminal background probe that would flash the alternate screen")
 	}
 }
