@@ -2,6 +2,18 @@
 
 All notable changes to Kranz are documented here. The project follows [Semantic Versioning](https://semver.org/), and release notes are generated from conventional commit subjects.
 
+## [0.6.1] - 2026-08-10
+
+### Changed
+
+- Modal dialogs now use borderless elevated surfaces with more deliberate spacing and an adaptive color-preserving scrim for both light and dark themes.
+
+### Fixed
+
+- Mouse tracking is periodically re-enabled and restored on focus, so clicks recover when an integrated terminal silently drops mouse reporting.
+- Returning focus to the terminal no longer starts a background-color probe that could briefly flash or repaint the TUI.
+- Global and project appearance saves now require explicit confirmation, show the exact destination, and reuse the theme picker's styled appearance summary.
+
 ## [0.6.0] - 2026-08-06
 
 ### Added
@@ -131,7 +143,8 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 - Explicit global-user and project-config save destinations in the live theme picker.
 - Native compatibility for common Process Compose configurations.
 
-[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/kranz-org/kranz/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/kranz-org/kranz/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kranz-org/kranz/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kranz-org/kranz/compare/v0.3.0...v0.4.0

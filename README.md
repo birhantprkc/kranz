@@ -105,7 +105,7 @@ Compose, and port-discovery projects live in [`examples/`](examples/).
 - **Procfile compatibility** for conservative `name: command` files, preserving
   service order and command text
 - **Live appearance editing** for theme, accent, canvas, and color mode, with
-  temporary apply, personal/project saves, and reload of the saved appearance
+  temporary apply, confirmed personal/project saves, and reload of the saved appearance
 
 Interface details — 19 themes, full mouse support, `Ctrl+O` shell handoff, and
 in-app notifications — are described under [Controls](#controls).
@@ -392,9 +392,10 @@ destinations; both persistent paths are shown:
 - **`g` — personal user override.** Written atomically with user-only
   permissions to the platform configuration directory:
   `~/Library/Application Support/kranz/settings.yaml` on macOS, typically
-  `~/.config/kranz/settings.yaml` on Linux.
+  `~/.config/kranz/settings.yaml` on Linux. Kranz shows the destination and
+  resolved appearance for confirmation before writing.
 - **`c` — project default.** Written to the project's native Kranz YAML,
-  clearing the matching global overrides.
+  clearing the matching global overrides after the same explicit confirmation.
 
 `Esc` closes the picker without saving.
 

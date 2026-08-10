@@ -462,7 +462,7 @@ func TestThemeSaveConfirmationCanCancelWithoutWriting(t *testing.T) {
 		t.Fatalf("global save did not open its confirmation; mode %v", model.mode)
 	}
 	parameterRows := make(map[int]string)
-	for _, label := range []string{"Theme PROJECT", "Accent THEME", "Background TERMINAL", "Mode AUTO"} {
+	for _, label := range []string{"Theme: PROJECT", "Accent: THEME", "Background: TERMINAL", "Mode: AUTO"} {
 		row := -1
 		for index, line := range strings.Split(confirmation, "\n") {
 			if strings.Contains(line, label) {

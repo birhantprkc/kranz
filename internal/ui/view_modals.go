@@ -311,7 +311,7 @@ func (m *Model) renderConfirmThemeSaveView() string {
 	body := []string{"This will write the current appearance to:"}
 	body = append(body, wrapDetailValue(path, max(20, m.width-20))...)
 	body = append(body, "")
-	body = append(body, m.themePickerSummaryLines()...)
+	body = append(body, m.renderThemePickerSummaryRows()...)
 	content := renderConfirmationModal(title, body, "[Enter/y] Save  [Esc/n] Cancel")
 	return m.placeOverlay(content)
 }
@@ -384,11 +384,8 @@ func (m *Model) renderThemeView() string {
 	lines := []string{
 		ModalTitleStyle.Render(" Themes "),
 		"",
-		"  " + m.renderThemePickerThemeSetting(projectTheme),
-		"  " + m.renderThemePickerAccentSetting(),
-		"  " + m.renderThemePickerBackgroundSetting(),
-		"  " + renderThemeSetting("Mode", m.themePickerColorModeLabel()),
 	}
+	lines = append(lines, m.renderThemePickerSummaryRows()...)
 	// The header aligns with the palette column: the row indent plus the marker
 	// plus the padded name width.
 	themeLines := []string{"  " + strings.Repeat(" ", themeRowMarkerWidth+themeRowNameWidth) + ContextBarStyle.Render("A T M B")}
@@ -428,6 +425,22 @@ func (m *Model) renderThemeView() string {
 		lines = append(lines, pathLines...)
 	}
 	return m.placeOverlay(renderFlushModal(strings.Join(lines, "\n")))
+}
+
+// renderThemePickerSummaryRows is shared by the picker and its save
+// confirmation so labels, punctuation, source names, and colour styling cannot
+// drift between the two views.
+func (m *Model) renderThemePickerSummaryRows() []string {
+	projectTheme := m.cfg.UI.Theme
+	if projectTheme == "" {
+		projectTheme = DefaultTheme
+	}
+	return []string{
+		"  " + m.renderThemePickerThemeSetting(projectTheme),
+		"  " + m.renderThemePickerAccentSetting(),
+		"  " + m.renderThemePickerBackgroundSetting(),
+		"  " + renderThemeSetting("Mode", m.themePickerColorModeLabel()),
+	}
 }
 
 const (
