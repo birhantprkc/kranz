@@ -4,23 +4,25 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	ColorGreen      lipgloss.Color
-	ColorYellow     lipgloss.Color
-	ColorRed        lipgloss.Color
-	ColorGrey       lipgloss.Color
-	ColorCyan       lipgloss.Color
-	ColorAccentText lipgloss.Color
-	ColorInfo       lipgloss.Color
-	ColorData       lipgloss.Color
-	ColorSelection  lipgloss.Color
-	ColorSelectText lipgloss.Color
-	ColorBackground lipgloss.Color
-	ColorDarkBg     lipgloss.Color
-	ColorSurfaceAlt lipgloss.Color
-	ColorBorder     lipgloss.Color
-	ColorDim        lipgloss.Color
-	ColorStopped    lipgloss.Color
-	TerminalCanvas  bool
+	ColorGreen          lipgloss.Color
+	ColorYellow         lipgloss.Color
+	ColorRed            lipgloss.Color
+	ColorGrey           lipgloss.Color
+	ColorCyan           lipgloss.Color
+	ColorAccentText     lipgloss.Color
+	ColorInfo           lipgloss.Color
+	ColorData           lipgloss.Color
+	ColorSelection      lipgloss.Color
+	ColorSelectText     lipgloss.Color
+	ColorBackground     lipgloss.Color
+	ColorDarkBg         lipgloss.Color
+	ColorSurfaceAlt     lipgloss.Color
+	ColorOverlay        lipgloss.Color
+	modalOverlayOpacity float64
+	ColorBorder         lipgloss.Color
+	ColorDim            lipgloss.Color
+	ColorStopped        lipgloss.Color
+	TerminalCanvas      bool
 
 	HeaderStyle           lipgloss.Style
 	ModalTitleStyle       lipgloss.Style
@@ -81,6 +83,11 @@ func applyPalette(theme Theme) {
 	ColorBackground = lipgloss.Color(theme.Background)
 	ColorDarkBg = lipgloss.Color(theme.Surface)
 	ColorSurfaceAlt = lipgloss.Color(theme.SurfaceAlt)
+	modalOverlayOpacity = 0.42
+	if background, ok := parseHex(theme.Background); ok && relativeLuminance(background) > 0.45 {
+		modalOverlayOpacity = 0.18
+	}
+	ColorOverlay = lipgloss.Color(mixHex(theme.Background, "#000000", modalOverlayOpacity))
 	ColorBorder = lipgloss.Color(theme.Border)
 	ColorDim = lipgloss.Color(theme.Muted)
 	stopped := "#94A3B8"
@@ -123,7 +130,8 @@ func applyPalette(theme Theme) {
 	LogTimestampStyle = lipgloss.NewStyle().Foreground(ColorDim)
 	LogSourceStyle = lipgloss.NewStyle().Foreground(ColorDim)
 	HelpKeyStyle = lipgloss.NewStyle().Foreground(ColorInfo).Bold(true)
-	ModalStyle = lipgloss.NewStyle().Foreground(ColorGrey).Border(lipgloss.RoundedBorder()).BorderForeground(ColorCyan).Padding(1, 2)
+	ModalStyle = lipgloss.NewStyle().Foreground(ColorGrey).Background(ColorSurfaceAlt).Padding(2, 4)
+	ModalTitleStyle = ModalTitleStyle.Background(ColorSurfaceAlt)
 	NewLogIndicatorStyle = lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
 	SearchHighlightStyle = lipgloss.NewStyle().Background(ColorInfo).Foreground(lipgloss.Color(ensureContrast(theme.Surface, theme.Info, 4.5))).Bold(true)
 	SearchInputStyle = lipgloss.NewStyle().Foreground(ColorInfo)
@@ -145,13 +153,6 @@ func applyPalette(theme Theme) {
 	StartingBadgeStyle = lipgloss.NewStyle().Foreground(ColorYellow).Bold(true)
 	StoppedBadgeStyle = lipgloss.NewStyle().Foreground(ColorStopped)
 	FailedBadgeStyle = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
-	if !TerminalCanvas {
-		// Modals and confirmations sit on SurfaceAlt, a colour the canvas does
-		// not share, so an unpainted border leaves a one-cell seam of canvas
-		// around every dialog.
-		ModalStyle = ModalStyle.Background(ColorSurfaceAlt).BorderBackground(ColorSurfaceAlt)
-		ModalTitleStyle = ModalTitleStyle.Background(ColorSurfaceAlt)
-	}
 }
 
 func focusedPanelTitleBackground(theme Theme) string {

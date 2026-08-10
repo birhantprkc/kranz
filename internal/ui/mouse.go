@@ -302,6 +302,13 @@ func (m *Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.clearPinned = false
 			m.mode = ModeNormal
 		}
+	case ModeConfirmThemeSave:
+		if renderedTextHit(rendered, msg.X, msg.Y, "[Enter/y] Save") {
+			return m.handleConfirmThemeSaveKeys(keyMessage("enter"))
+		}
+		if renderedTextHit(rendered, msg.X, msg.Y, "[Esc/n] Cancel") {
+			return m.handleConfirmThemeSaveKeys(keyMessage("esc"))
+		}
 	case ModePortConflict:
 		return m.handleMouseKeyBindings(rendered, msg, []mouseKeyBinding{
 			{label: "[k] Stop this external process and retry", key: "k"},

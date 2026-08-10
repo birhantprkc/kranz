@@ -214,7 +214,8 @@ func TestThemeStylesPanelTitlesAsSurfaceLabels(t *testing.T) {
 	want := lipgloss.Color(theme.Accent)
 	for name, got := range map[string]lipgloss.TerminalColor{
 		"header":         HeaderStyle.GetForeground(),
-		"focused border": FocusedPanelStyle.GetBorderTopForeground(), "modal border": ModalStyle.GetBorderTopForeground(),
+		"focused border": FocusedPanelStyle.GetBorderTopForeground(),
+		"modal title":    ModalTitleStyle.GetForeground(),
 	} {
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s color = %#v, want %#v", name, got, want)

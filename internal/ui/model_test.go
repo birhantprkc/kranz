@@ -500,13 +500,23 @@ func TestHelpOverlaysDimmedDashboard(t *testing.T) {
 	if lipgloss.Height(rendered) != model.height {
 		t.Fatalf("help height = %d, want %d", lipgloss.Height(rendered), model.height)
 	}
+	if serviceStyle := terminalStylePrefix(ServiceNameStyle); serviceStyle != "" && !strings.Contains(rendered, serviceStyle) {
+		t.Fatal("help overlay discarded the dashboard's service colours")
+	}
 }
 
 func TestHelpAndThemeModalsUseFlushContentAndSeparatedTitles(t *testing.T) {
 	plain := ansi.Strip(renderFlushModal("title\n\n  body\n\n[Esc] Close"))
-	for _, expected := range []string{"│title", "│  body", "│[Esc] Close"} {
-		if !strings.Contains(plain, "\n"+expected) {
-			t.Fatalf("flush modal does not align %q against the inner border:\n%s", expected, plain)
+	for _, expected := range []string{"  title", "    body", "  [Esc] Close"} {
+		found := false
+		for _, line := range strings.Split(plain, "\n") {
+			if strings.TrimRight(line, " ") == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("flush modal does not preserve content alignment for %q:\n%s", expected, plain)
 		}
 	}
 
@@ -681,11 +691,11 @@ func TestHelpUsesTheWiderLimitAndRespectsTerminalBackground(t *testing.T) {
 	if widest <= 100 || widest > 105 {
 		t.Fatalf("help body width = %d, want the new 101–105 cell range", widest)
 	}
-	if _, ok := ModalStyle.GetBackground().(lipgloss.NoColor); !ok {
-		t.Fatalf("terminal-owned help still paints theme background %#v", ModalStyle.GetBackground())
+	if !reflect.DeepEqual(ModalStyle.GetBackground(), lipgloss.Color(model.activeTheme.SurfaceAlt)) {
+		t.Fatalf("terminal-owned help background = %#v, want modal surface %s", ModalStyle.GetBackground(), model.activeTheme.SurfaceAlt)
 	}
-	if _, ok := ModalTitleStyle.GetBackground().(lipgloss.NoColor); !ok {
-		t.Fatalf("terminal-owned help title still paints theme background %#v", ModalTitleStyle.GetBackground())
+	if !reflect.DeepEqual(ModalTitleStyle.GetBackground(), lipgloss.Color(model.activeTheme.SurfaceAlt)) {
+		t.Fatalf("terminal-owned help title background = %#v, want modal surface %s", ModalTitleStyle.GetBackground(), model.activeTheme.SurfaceAlt)
 	}
 
 	painted, err := ApplyTheme(DefaultTheme, "")

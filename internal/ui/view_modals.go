@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -299,6 +301,21 @@ func (m *Model) renderConfirmClearLogsView() string {
 	return m.placeOverlay(content)
 }
 
+func (m *Model) renderConfirmThemeSaveView() string {
+	title := "Save global appearance?"
+	path := m.settingsPath
+	if m.themeSaveScope == themeSaveProject {
+		title = "Save project appearance?"
+		path = m.themeProjectConfigPath()
+	}
+	body := []string{"This will write the current appearance to:"}
+	body = append(body, wrapDetailValue(path, max(20, m.width-20))...)
+	body = append(body, "")
+	body = append(body, m.themePickerSummaryLines()...)
+	content := renderConfirmationModal(title, body, "[Enter/y] Save  [Esc/n] Cancel")
+	return m.placeOverlay(content)
+}
+
 func (m *Model) renderThemeView() string {
 	names := ThemeNames()
 	pathWidth := max(20, m.width-12)
@@ -338,7 +355,7 @@ func (m *Model) renderThemeView() string {
 		previewTheme = adaptThemeBackground(previewTheme, colorModeIsDark(m.themeColorMode, m.terminalDark))
 	}
 	// Keep the controls visible even in a 24-row terminal. The fixed rows are
-	// the six-row settings summary, the five-row footer, the modal border and
+	// the six-row settings summary, the five-row footer, the modal's vertical
 	// padding, the path separator, and the paths themselves. The remaining rows
 	// are shared by the theme table and its side preview.
 	pathSeparatorRows := 0
@@ -534,14 +551,12 @@ func renderModal(content string) string {
 }
 
 func renderFlushModal(content string) string {
-	return renderModalWithStyle(padModalSideMargin(content), ModalStyle.PaddingLeft(0).PaddingRight(0))
+	return renderModalWithStyle(padModalSideMargin(content), ModalStyle.PaddingLeft(2).PaddingRight(2))
 }
 
-// padModalSideMargin gives a flush modal the same gutter on the right that its
-// content already indents on the left. Flush modals drop the style's horizontal
-// padding so a full-width row can reach the border, and every line then carries
-// its own two-space indent — which left the right-hand column of the theme
-// picker pressed against the frame.
+// padModalSideMargin gives a flush modal the same surface gutter on the right
+// that its content already indents on the left. Flush modals drop the style's
+// horizontal padding and every line carries its own two-space indent.
 func padModalSideMargin(content string) string {
 	lines := strings.Split(content, "\n")
 	widest := 0
@@ -555,10 +570,7 @@ func padModalSideMargin(content string) string {
 }
 
 func renderModalWithStyle(content string, style lipgloss.Style) string {
-	modalContentStyle := lipgloss.NewStyle().Foreground(ColorGrey)
-	if !TerminalCanvas {
-		modalContentStyle = modalContentStyle.Background(ColorSurfaceAlt)
-	}
+	modalContentStyle := lipgloss.NewStyle().Foreground(ColorGrey).Background(ColorSurfaceAlt)
 	return style.Render(preserveStyleAfterReset(content, modalContentStyle))
 }
 
@@ -767,7 +779,7 @@ func (m *Model) themePickerColorModeLabel() string {
 
 // placeOverlay composites a modal over a dimmed snapshot of the dashboard.
 func (m *Model) placeOverlay(content string) string {
-	background := strings.Split(ansi.Strip(m.renderMainView()), "\n")
+	background := strings.Split(m.renderMainView(), "\n")
 	for len(background) < m.height {
 		background = append(background, "")
 	}
@@ -782,21 +794,79 @@ func (m *Model) placeOverlay(content string) string {
 	}
 	top := max(0, (m.height-len(contentLines))/2)
 	left := max(0, (m.width-contentWidth)/2)
-	dim := lipgloss.NewStyle().Foreground(ColorDim).Faint(true)
+	// Emulate a translucent black layer by mixing every ANSI colour with black.
+	// The explicit background applies the same blend to otherwise empty cells.
+	dim := lipgloss.NewStyle().Background(ColorOverlay)
+	dimBackground := func(fragment string) string {
+		fragment = darkenANSIColors(fragment, modalOverlayOpacity)
+		return dim.Render(preserveStyleAfterReset(fragment, dim))
+	}
 
 	result := make([]string, m.height)
 	for row := 0; row < m.height; row++ {
 		base := padPlainLine(background[row], m.width)
 		modalRow := row - top
 		if modalRow < 0 || modalRow >= len(contentLines) {
-			result[row] = dim.Render(base)
+			result[row] = dimBackground(base)
 			continue
 		}
 		foreground := ansi.Truncate(contentLines[modalRow], contentWidth, "")
 		foreground += strings.Repeat(" ", max(0, contentWidth-lipgloss.Width(foreground)))
-		baseRunes := []rune(base)
-		end := min(len(baseRunes), left+contentWidth)
-		result[row] = dim.Render(string(baseRunes[:min(left, len(baseRunes))])) + foreground + dim.Render(string(baseRunes[end:]))
+		end := min(m.width, left+contentWidth)
+		result[row] = dimBackground(ansi.Cut(base, 0, left)) + foreground + dimBackground(ansi.Cut(base, end, m.width))
 	}
 	return strings.Join(result, "\n")
+}
+
+// darkenANSIColors emulates a translucent black overlay for true-colour SGR
+// foregrounds, backgrounds, and underline colours without changing their hue.
+func darkenANSIColors(value string, opacity float64) string {
+	var result strings.Builder
+	for len(value) > 0 {
+		start := strings.Index(value, "\x1b[")
+		if start < 0 {
+			result.WriteString(value)
+			break
+		}
+		result.WriteString(value[:start])
+		end := strings.IndexByte(value[start+2:], 'm')
+		if end < 0 {
+			result.WriteString(value[start:])
+			break
+		}
+		end += start + 2
+		params := strings.Split(value[start+2:end], ";")
+		kept := make([]string, 0, len(params))
+		for index := 0; index < len(params); index++ {
+			parameter := params[index]
+			if (parameter == "38" || parameter == "48" || parameter == "58") &&
+				index+4 < len(params) && params[index+1] == "2" {
+				kept = append(kept, parameter, "2")
+				for component := index + 2; component <= index+4; component++ {
+					componentValue, err := strconv.Atoi(params[component])
+					if err != nil {
+						kept = append(kept, params[component])
+						continue
+					}
+					darkened := int(math.Round(float64(componentValue) * (1 - opacity)))
+					kept = append(kept, strconv.Itoa(max(0, min(255, darkened))))
+				}
+				index += 4
+				continue
+			}
+			// Default background would punch a terminal-coloured hole through the
+			// overlay; leaving it out lets the blended canvas remain in force.
+			if parameter == "49" {
+				continue
+			}
+			kept = append(kept, parameter)
+		}
+		if len(kept) > 0 {
+			result.WriteString("\x1b[")
+			result.WriteString(strings.Join(kept, ";"))
+			result.WriteByte('m')
+		}
+		value = value[end+1:]
+	}
+	return result.String()
 }

@@ -19,6 +19,14 @@ import (
 
 // Tests for appearance resolution and the theme picker.
 
+func confirmPendingThemeSave(t *testing.T, model *Model) {
+	t.Helper()
+	if model.mode != ModeConfirmThemeSave {
+		t.Fatalf("theme save did not ask for confirmation; mode = %v", model.mode)
+	}
+	_, _ = model.handleConfirmThemeSaveKeys(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
 func TestThemeOverridePrecedenceAndPersistence(t *testing.T) {
 	defer func() { _, _ = ApplyTheme(DefaultTheme, "") }()
 	settingsPath := filepath.Join(t.TempDir(), "settings.yaml")
@@ -36,6 +44,7 @@ func TestThemeOverridePrecedenceAndPersistence(t *testing.T) {
 	model.openThemePicker()
 	model.themeCursor = 0
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	confirmPendingThemeSave(t, model)
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -334,6 +343,7 @@ func TestThemePickerPersistsBackgroundOverrideAgainstProject(t *testing.T) {
 		t.Fatalf("b background = %q, want terminal", model.themePickerBackground())
 	}
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	confirmPendingThemeSave(t, model)
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -384,6 +394,7 @@ func TestGlobalColorModeOverridePersistsIndependently(t *testing.T) {
 	}
 	model.openThemePicker()
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	confirmPendingThemeSave(t, model)
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -405,7 +416,7 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 	model.openThemePicker()
 
 	plain := ansi.Strip(model.renderThemeView())
-	for _, expected := range []string{"Preview", "Accent background", "Neutral background", "[p] Theme: Project / Selected", "[a] Accent: Project / Theme", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "[Esc] Cancel", "SAVE", "[g] Global", "[c] Project", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
+	for _, expected := range []string{"[p] Theme: Project / Selected", "[a] Accent: Project / Theme", "[b] Background: Terminal / Theme", "[m] Mode: Auto / Dark / Light", "SESSION", "[Enter] Apply", "[r] Reload saved", "[Esc] Cancel", "SAVE", "[g] Global", "[c] Project", "Global: /tmp/settings.yaml", "Project: /tmp/kranz.yaml"} {
 		if !strings.Contains(plain, expected) {
 			t.Errorf("24-row theme picker clipped %q:\n%s", expected, plain)
 		}
@@ -432,6 +443,69 @@ func TestThemePickerKeepsAllControlsVisibleAtTwentyFourRows(t *testing.T) {
 	}
 	if themePositionLine < 0 || controlsLine < themePositionLine+2 {
 		t.Errorf("theme list is not separated from the controls:\n%s", plain)
+	}
+}
+
+func TestThemeSaveConfirmationCanCancelWithoutWriting(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.yaml")
+	model := NewModelWithOptions(&config.Config{
+		Project: "Confirm", UI: config.UIConfig{Theme: "forest"},
+		Services: map[string]config.Service{"app": {Command: "exit 0"}},
+	}, "test", ModelOptions{SettingsPath: settingsPath})
+	defer model.Shutdown()
+	model.width, model.height, model.ready = 100, 28, true
+	model.openThemePicker()
+
+	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	confirmation := ansi.Strip(model.renderConfirmThemeSaveView())
+	if model.mode != ModeConfirmThemeSave || !strings.Contains(confirmation, "Save global appearance?") {
+		t.Fatalf("global save did not open its confirmation; mode %v", model.mode)
+	}
+	parameterRows := make(map[int]string)
+	for _, label := range []string{"Theme PROJECT", "Accent THEME", "Background TERMINAL", "Mode AUTO"} {
+		row := -1
+		for index, line := range strings.Split(confirmation, "\n") {
+			if strings.Contains(line, label) {
+				row = index
+				break
+			}
+		}
+		if row < 0 {
+			t.Errorf("confirmation does not contain %q:\n%s", label, confirmation)
+			continue
+		}
+		if previous, exists := parameterRows[row]; exists {
+			t.Errorf("%q and %q share confirmation row %d:\n%s", previous, label, row, confirmation)
+		}
+		parameterRows[row] = label
+	}
+	_, _ = model.handleConfirmThemeSaveKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.mode != ModeThemes {
+		t.Fatalf("cancel returned to mode %v, want theme picker", model.mode)
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("cancelled global save touched %s: %v", settingsPath, err)
+	}
+}
+
+func TestBackdropBlendsForegroundAndBackgroundWithBlack(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(previousProfile)
+
+	painted := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#C0392B")).
+		Background(lipgloss.Color("#FDF6E3")).
+		Render("colour")
+	darkened := darkenANSIColors(painted, 0.18)
+	if ansi.Strip(darkened) != "colour" {
+		t.Fatalf("colour blending changed text: %q", ansi.Strip(darkened))
+	}
+	if !strings.Contains(darkened, "38;2;157;46;35") {
+		t.Fatalf("foreground was not blended with black: %q", darkened)
+	}
+	if !strings.Contains(darkened, "48;2;207;202;186") {
+		t.Fatalf("background was not blended with black: %q", darkened)
 	}
 }
 
@@ -484,6 +558,10 @@ func TestMouseControlsCompleteThemePicker(t *testing.T) {
 	}
 
 	clickRenderedText(t, model, "[g] Global")
+	if model.mode != ModeConfirmThemeSave {
+		t.Fatalf("global theme save click did not open confirmation; mode %v", model.mode)
+	}
+	clickRenderedText(t, model, "[Enter/y] Save")
 	if model.mode != ModeNormal {
 		t.Fatalf("global theme save click left mode %v", model.mode)
 	}
@@ -604,6 +682,7 @@ func TestThemePickerSavesAppearanceToProjectConfig(t *testing.T) {
 	defer model.Shutdown()
 	model.openThemePicker()
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	confirmPendingThemeSave(t, model)
 	if model.mode != ModeNormal {
 		t.Fatal("successful project save did not close the theme picker")
 	}
@@ -642,6 +721,7 @@ func TestThemeAccentEditorSavesCustomColorToProject(t *testing.T) {
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#445566")})
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	confirmPendingThemeSave(t, model)
 
 	saved, err := config.Load(path)
 	if err != nil {
@@ -920,10 +1000,7 @@ func TestThemePickerSurvivesConfigReload(t *testing.T) {
 	}
 }
 
-// lipgloss paints border cells only through BorderBackground; Background alone
-// leaves them transparent and the canvas shows through as a one-cell seam
-// around every dialog, because modals sit on SurfaceAlt rather than the canvas.
-func TestModalBordersShareTheModalSurface(t *testing.T) {
+func TestModalsAreBorderlessSolidSurfaces(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(previousProfile)
@@ -950,12 +1027,12 @@ func TestModalBordersShareTheModalSurface(t *testing.T) {
 		"plain modal":  renderModal("body"),
 		"flush modal":  renderFlushModal("body"),
 	} {
+		if strings.ContainsAny(ansi.Strip(rendered), "╭╮╰╯│") {
+			t.Errorf("%s still draws a modal border:\n%s", name, ansi.Strip(rendered))
+		}
 		for index, line := range strings.Split(rendered, "\n") {
-			if !strings.ContainsAny(ansi.Strip(line), "\u256d\u2570\u2502") {
-				continue
-			}
 			if !strings.Contains(line, surfaceSequence) {
-				t.Errorf("%s row %d draws its border without the modal surface %s, leaving a canvas seam:\n%q",
+				t.Errorf("%s row %d does not paint the modal surface %s:\n%q",
 					name, index, model.activeTheme.SurfaceAlt, line)
 			}
 		}
@@ -1063,6 +1140,7 @@ func TestCustomBackgroundRoundTripsThroughSettings(t *testing.T) {
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("204060")})
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
 	_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	confirmPendingThemeSave(t, model)
 
 	saved, err := usersettings.Load(settingsPath)
 	if err != nil {
@@ -1193,8 +1271,8 @@ func TestEnteredColoursAreUsedVerbatim(t *testing.T) {
 		Services: map[string]config.Service{"app": {Command: "exit 0"}},
 	}, "test", ModelOptions{Settings: usersettings.Settings{Background: backgroundTheme}})
 	defer model.Shutdown()
-	if got := fmt.Sprint(ModalStyle.GetBorderTopForeground()); got != "#B91C1C" {
-		t.Errorf("modal border = %s, want the entered accent #B91C1C", got)
+	if got := fmt.Sprint(ModalTitleStyle.GetForeground()); got != "#B91C1C" {
+		t.Errorf("modal title = %s, want the entered accent #B91C1C", got)
 	}
 	if got := fmt.Sprint(FocusedPanelStyle.GetBorderTopForeground()); got != "#B91C1C" {
 		t.Errorf("focused panel border = %s, want the entered accent #B91C1C", got)
@@ -1205,24 +1283,13 @@ func TestEnteredColoursAreUsedVerbatim(t *testing.T) {
 // column reserves room for it up front, because sizing to the current labels
 // made the modal jump nine columns wider the moment a custom colour appeared.
 func TestThemePickerWidthDoesNotChangeWhenCustomColoursAppear(t *testing.T) {
-	// The modal's own top border, measured as its unbroken run of box drawing.
-	modalWidth := func(model *Model) int {
+	// A centered borderless modal changes its left edge whenever its width
+	// changes, so the title column is a stable proxy for its bounds.
+	modalLeft := func(model *Model) int {
 		t.Helper()
 		for _, line := range strings.Split(ansi.Strip(model.renderThemeView()), "\n") {
-			index := strings.Index(line, "╭")
-			if index < 5 {
-				continue // a dashboard panel at the screen edge, not the modal
-			}
-			run := 0
-			for _, symbol := range line[index:] {
-				if symbol == '─' {
-					run++
-				} else if run > 0 {
-					break
-				}
-			}
-			if run > 10 {
-				return run + 2
+			if index := strings.Index(line, "Themes"); index >= 2 {
+				return index - 2
 			}
 		}
 		t.Fatal("theme picker modal not found")
@@ -1236,83 +1303,38 @@ func TestThemePickerWidthDoesNotChangeWhenCustomColoursAppear(t *testing.T) {
 		}, "test")
 		model.width, model.height, model.ready = 120, 34, true
 		model.openThemePicker()
-		want := modalWidth(model)
+		want := modalLeft(model)
 
 		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
 		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("204060")})
 		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
-		if got := modalWidth(model); got != want {
-			t.Errorf("project accent %q: a custom background changed the width %d → %d", projectAccent, want, got)
+		if got := modalLeft(model); got != want {
+			t.Errorf("project accent %q: a custom background moved the modal edge %d → %d", projectAccent, want, got)
 		}
 
 		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
 		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("FF8800")})
 		_, _ = model.handleThemeKeys(tea.KeyMsg{Type: tea.KeyEnter})
-		if got := modalWidth(model); got != want {
-			t.Errorf("project accent %q: a custom accent changed the width %d → %d", projectAccent, want, got)
+		if got := modalLeft(model); got != want {
+			t.Errorf("project accent %q: a custom accent moved the modal edge %d → %d", projectAccent, want, got)
 		}
 		model.Shutdown()
 	}
 }
 
-// A flush modal drops the style's horizontal padding so a full-width row can
-// reach the border, and every content line then carries its own two-space
-// indent. Nothing balanced that on the right, so the widest row — the key hints
-// — sat flush against the frame.
+// A flush modal carries its inset in the content itself, so padModalSideMargin
+// must reserve the same amount of empty surface on the right.
 func TestThemePickerKeepsEqualSideMargins(t *testing.T) {
-	model := NewModel(&config.Config{
-		Project: "Margins", UI: config.UIConfig{Theme: "forest", Accent: "#2AB630"},
-		Services: map[string]config.Service{"app": {Command: "exit 0"}},
-	}, "test")
-	defer model.Shutdown()
-	model.width, model.height, model.ready = 120, 34, true
-	model.openThemePicker()
-
-	lines := strings.Split(ansi.Strip(model.renderThemeView()), "\n")
-	left, right := -1, -1
-	for _, line := range lines {
-		runes := []rune(line)
-		for index, symbol := range runes {
-			if symbol != '╭' || index <= 5 {
-				continue // a dashboard panel at the screen edge, not the modal
-			}
-			left = index
-			for scan := index; scan < len(runes); scan++ {
-				if runes[scan] == '╮' {
-					right = scan
-					break
-				}
-			}
-			break
-		}
-		if left >= 0 {
-			break
-		}
+	lines := strings.Split(padModalSideMargin("  short\n  widest row"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("padded modal has %d rows, want 2", len(lines))
 	}
-	if left < 0 || right <= left {
-		t.Fatal("theme picker modal not found")
+	widest := strings.TrimRight(lines[1], " ")
+	if !strings.HasPrefix(widest, strings.Repeat(" ", modalSideMargin)) {
+		t.Fatalf("widest row lost its left inset: %q", lines[1])
 	}
-
-	// Cells, not bytes: the rows are full of multi-byte box drawing. Only rows
-	// framed by │ are content; the ╭─╮ and ╰─╯ rows are the frame itself.
-	widest := 0
-	for _, line := range lines {
-		runes := []rune(line)
-		if right >= len(runes) || runes[left] != '│' || runes[right] != '│' {
-			continue
-		}
-		inner := string(runes[left+1 : right])
-		if strings.TrimSpace(inner) == "" {
-			continue
-		}
-		widest = max(widest, lipgloss.Width(strings.TrimRight(inner, " ")))
-	}
-	if widest == 0 {
-		t.Fatal("no content rows found inside the modal")
-	}
-	if gutter := (right - left - 1) - widest; gutter != modalSideMargin {
-		t.Errorf("the widest row leaves %d cells before the frame, want %d to match the left indent",
-			gutter, modalSideMargin)
+	if gutter := lipgloss.Width(lines[1]) - lipgloss.Width(widest); gutter != modalSideMargin {
+		t.Errorf("widest row leaves %d surface cells on the right, want %d", gutter, modalSideMargin)
 	}
 }
 

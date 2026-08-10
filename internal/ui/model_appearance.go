@@ -292,9 +292,9 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r", "R":
 		m.reloadSavedAppearance()
 	case "g", "G":
-		m.saveThemePicker(names)
+		m.beginThemeSaveConfirmation(themeSaveGlobal)
 	case "c", "C":
-		m.saveThemePickerToProject()
+		m.beginThemeSaveConfirmation(themeSaveProject)
 	case "p", "P":
 		m.themeUseProject = !m.themeUseProject
 		m.previewThemePicker()
@@ -310,6 +310,32 @@ func (m *Model) handleThemeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleThemeColorMode()
 	case "esc", "q":
 		m.cancelThemePicker()
+	}
+	return m, nil
+}
+
+func (m *Model) beginThemeSaveConfirmation(scope themeSaveScope) {
+	if scope == themeSaveProject && m.themeProjectConfigPath() == "" {
+		m.addNotification("settings", "No project configuration path is available", config.LogError)
+		return
+	}
+	m.themeSaveScope = scope
+	m.mode = ModeConfirmThemeSave
+}
+
+func (m *Model) handleConfirmThemeSaveKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y", "enter":
+		scope := m.themeSaveScope
+		m.themeSaveScope = themeSaveNone
+		if scope == themeSaveProject {
+			m.saveThemePickerToProject()
+		} else if scope == themeSaveGlobal {
+			m.saveThemePicker(ThemeNames())
+		}
+	case "n", "N", "esc":
+		m.themeSaveScope = themeSaveNone
+		m.mode = ModeThemes
 	}
 	return m, nil
 }
@@ -678,16 +704,20 @@ func isCustomAccent(accent, projectAccent string) bool {
 // set of conditions is how the two drifted apart before, when the panel read
 // themeCustomAccent and this summary still only knew Theme versus Project.
 func (m *Model) themePickerSummary() string {
+	return strings.Join(m.themePickerSummaryLines(), " / ")
+}
+
+func (m *Model) themePickerSummaryLines() []string {
 	projectTheme := m.cfg.UI.Theme
 	if projectTheme == "" {
 		projectTheme = DefaultTheme
 	}
-	return strings.Join([]string{
+	return []string{
 		"Theme " + m.themePickerThemeLabel(projectTheme),
 		"Accent " + m.themePickerAccentLabel(),
 		"Background " + m.themePickerBackgroundLabel(),
 		"Mode " + m.themePickerColorModeLabel(),
-	}, " / ")
+	}
 }
 
 func (m *Model) persistSettings() error {
