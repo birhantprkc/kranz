@@ -328,9 +328,10 @@ func (m *Model) handleConfirmThemeSaveKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 	case "y", "Y", "enter":
 		scope := m.themeSaveScope
 		m.themeSaveScope = themeSaveNone
-		if scope == themeSaveProject {
+		switch scope {
+		case themeSaveProject:
 			m.saveThemePickerToProject()
-		} else if scope == themeSaveGlobal {
+		case themeSaveGlobal:
 			m.saveThemePicker(ThemeNames())
 		}
 	case "n", "N", "esc":
