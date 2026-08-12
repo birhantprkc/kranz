@@ -217,8 +217,9 @@ func (m *Model) handleServiceRowClick(row, listHeight, column int) {
 	if index < start || index >= end {
 		return
 	}
-	m.moveFocus(index)
-	if column >= checkboxMinColumn && column <= checkboxMaxColumn {
+	rows := m.serviceListRows()
+	m.focusServiceListRow(index)
+	if index < len(rows) && rows[index].Kind == actionRowService && column >= checkboxMinColumn && column <= checkboxMaxColumn {
 		m.toggleFocusedSelection()
 	}
 }
@@ -301,6 +302,13 @@ func (m *Model) handleOverlayMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.clearTarget = ""
 			m.clearPinned = false
 			m.mode = ModeNormal
+		}
+	case ModeConfirmAction:
+		if renderedTextHit(rendered, msg.X, msg.Y, "[Enter/y] Run") {
+			return m, m.confirmPendingAction()
+		}
+		if renderedTextHit(rendered, msg.X, msg.Y, "[Esc/n] Cancel") {
+			m.cancelPendingAction()
 		}
 	case ModeConfirmThemeSave:
 		if renderedTextHit(rendered, msg.X, msg.Y, "[Enter/y] Save") {

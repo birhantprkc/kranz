@@ -48,9 +48,9 @@ func helpEntries() []helpEntry {
 		{"↑/↓ j/k", "Navigate or scroll focused panel"},
 		{"←/→", "Cycle Services/Tags while the list panel is focused"},
 		{"t", "Toggle Services/Tags from any panel"},
-		{"Enter", "In Tags: expand or collapse services below the focused tag"},
+		{"Enter", "Expand or collapse service actions, action groups, or a tag"},
 		{"Space", "Select/unselect service or tag"},
-		{"s", "Start stopped or stop running targets"},
+		{"s", "Start/stop service targets or run the focused action"},
 		{"Shift+S", "Start or stop only targets, ignoring dependency expansion"},
 		{"a", "Select/clear all services"},
 		{"A", "Stop all services"},
@@ -297,6 +297,37 @@ func (m *Model) renderConfirmClearLogsView() string {
 		fmt.Sprintf("Clear %s for %q?", panel, m.clearTarget),
 		[]string{"This cannot be undone."},
 		"[Enter] Clear  [Esc] Cancel",
+	)
+	return m.placeOverlay(content)
+}
+
+func (m *Model) renderConfirmActionView() string {
+	if m.pendingAction == nil {
+		return m.placeOverlay(renderConfirmationModal(
+			"Run action?",
+			[]string{"The selected action is no longer available."},
+			"[Esc/n] Cancel",
+		))
+	}
+	id := *m.pendingAction
+	action, exists := m.cfg.ResolveAction(id)
+	if !exists {
+		return m.placeOverlay(renderConfirmationModal(
+			fmt.Sprintf("Run action %q?", id.Name),
+			[]string{"The action is no longer configured."},
+			"[Esc/n] Cancel",
+		))
+	}
+	body := []string{fmt.Sprintf("Owner: %s", id.Owner)}
+	if action.Description != "" {
+		body = append(body, action.Description)
+	}
+	body = append(body, "", "Command:")
+	body = append(body, wrapDetailValue(action.Command, max(20, m.width-20))...)
+	content := renderConfirmationModal(
+		fmt.Sprintf("Run action %q?", id.Name),
+		body,
+		"[Enter/y] Run  [Esc/n] Cancel",
 	)
 	return m.placeOverlay(content)
 }
