@@ -9,6 +9,20 @@ use Docker, SSH, credentials, external hosts, or destructive system commands.
 They only open documented localhost ports; the lifecycle playground additionally
 creates ignored marker files inside its own directory.
 
+## MoonFlight: the whole model in one project
+
+```bash
+cd examples/moonflight
+kranz
+```
+
+The showcase project used for the documentation recordings: a detached resource
+that outlives the session, a migration other services wait to finish, two APIs
+behind an edge gateway, a front end on a port chosen at runtime with a
+`before_start` prerequisite, two workers, and a project action group. It only
+opens localhost ports 18921-18923 and writes marker files under
+`examples/moonflight/.kranz-demo`.
+
 ## Procfile: zero configuration
 
 ```bash
@@ -45,6 +59,10 @@ runs once per session, and a second service that references the same migration
 waits for that run instead of repeating it. The `gated-demo` service is
 disabled on purpose: edit its `preflight` action to `exit 1`, reload with
 `Ctrl+L`, and start it to see a prerequisite block a start.
+
+The same example carries `migrate-interactive`, an action that takes over the
+terminal to ask whether it should apply its migrations. Expand `catalog-api`,
+select it, and press `s`.
 
 ## Detached lifecycle playground
 

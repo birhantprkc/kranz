@@ -23,8 +23,21 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
   is loaded and validated by a test, a complete field-by-field configuration
   reference, and new CLI, appearance, troubleshooting, and Process Compose
   compatibility pages.
+- Interactive actions: `interactive: true` hands the real terminal to a command
+  that has to be answered, such as a migration that confirms before it writes,
+  and records its exit code and duration when it finishes. Running one always
+  asks first, warning that Kranz is about to leave the screen, so the interface
+  never disappears unannounced. Lifecycle commands
+  and prerequisites cannot be interactive, because both run unattended.
+- A MoonFlight showcase example: shared detached infrastructure, a migration
+  other services wait to finish, two APIs behind an edge gateway, a front end
+  on a runtime-discovered port with a prerequisite, two workers, and a project
+  action group. It is the project shown in the documentation recordings.
 - Reproducible terminal recordings generated from tapes in
-  `docs/assets/tapes/`.
+  `docs/assets/tapes/`, one per feature: actions, interactive handoff,
+  dependency gates, log search, appearance, prerequisites, detached lifecycle,
+  runtime ports, and the Procfile quickstart. The site hero and the quickstart
+  were previously captured by hand and could not be reproduced.
 
 ### Changed
 
@@ -59,6 +72,10 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ### Fixed
 
+- Quitting Kranz while an action holds the terminal no longer blocks shutdown
+  forever waiting for a command only the user can finish.
+- Documentation recordings sit in an evenly padded frame instead of gaining
+  vertical-only spacing from the surrounding paragraph.
 - `disabled` services are now actually excluded from select-all and start-all
   batch operations instead of only displaying a badge that claimed they were.
 - An out-of-range service status is no longer rendered as the deliberate
