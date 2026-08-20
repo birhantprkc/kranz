@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -148,6 +149,9 @@ func runUp(options kranzcli.GlobalOptions, args []string, stdout io.Writer) erro
 			selectors = append(selectors, arg)
 		}
 	}
+	if !detached && options.Output != kranzcli.OutputText {
+		return &kranzcli.Error{Code: "invalid_output", Message: "foreground up requires text output", Hint: "Use `kranz up -d --output json` for a machine-readable background start.", ExitCode: kranzcli.ExitUsage}
+	}
 	if noStart && len(selectors) > 0 {
 		return &kranzcli.Error{Code: "invalid_arguments", Message: "--no-start cannot be combined with selectors", ExitCode: kranzcli.ExitUsage}
 	}
@@ -267,6 +271,13 @@ type backgroundReady struct {
 	ExitCode int    `json:"exit_code,omitempty"`
 }
 
+type backgroundStartResult struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	PID  int    `json:"pid"`
+	Mode string `json:"mode"`
+}
+
 var newBackgroundCommand = func(executable string, args ...string) *exec.Cmd { return exec.Command(executable, args...) }
 
 func spawnBackground(options kranzcli.GlobalOptions, selectors []string, noStart bool, stdout io.Writer) error {
@@ -344,6 +355,11 @@ func spawnBackground(options kranzcli.GlobalOptions, selectors []string, noStart
 		}
 		if err := command.Process.Release(); err != nil {
 			return err
+		}
+		if options.Output == kranzcli.OutputJSON {
+			return kranzcli.WriteJSON(stdout, backgroundStartResult{
+				ID: result.ready.ID, Name: result.ready.Name, PID: result.ready.PID, Mode: "background",
+			})
 		}
 		_, err = fmt.Fprintf(stdout, "Started %s (%s), PID %d.\n", result.ready.Name, shortID(result.ready.ID), result.ready.PID)
 		return err
@@ -489,32 +505,20 @@ func terminateForegroundWithSignal(host *runtimeHost, closeHost func() error, si
 	return fmt.Errorf("re-raising %s with default disposition did not terminate the process", sig)
 }
 
-func resolveSession(options kranzcli.GlobalOptions, requireProject bool) (kranzruntime.SessionRecord, error) {
+// resolveSession finds the runtime a command applies to. An explicit -p always
+// wins, including from a directory that has a Kranz project of its own, so any
+// command can be aimed at another project without leaving the current one.
+// Without -p the runtime is the one named by the configuration in the working
+// directory, so every command agrees about "the project I am standing in"
+// instead of some commands knowing it and others demanding it be spelled out.
+func resolveSession(options kranzcli.GlobalOptions) (kranzruntime.SessionRecord, error) {
 	reference := options.Project
 	if reference == "" {
-		if requireProject {
-			return kranzruntime.SessionRecord{}, &kranzcli.Error{Code: "missing_project", Message: "-p NAME_OR_ID is required", ExitCode: kranzcli.ExitUsage}
-		}
-		original, err := os.Getwd()
+		name, err := runtimeNameFromDirectory(options)
 		if err != nil {
 			return kranzruntime.SessionRecord{}, err
 		}
-		if err := os.Chdir(options.Directory); err != nil {
-			return kranzruntime.SessionRecord{}, err
-		}
-		defer func() { _ = os.Chdir(original) }() // best effort; command performs no work after resolution on failure
-		paths := options.ConfigPaths
-		if len(paths) == 0 {
-			paths, err = config.DiscoverFiles(".")
-			if err != nil {
-				return kranzruntime.SessionRecord{}, err
-			}
-		}
-		cfg, err := config.LoadFiles(paths)
-		if err != nil {
-			return kranzruntime.SessionRecord{}, err
-		}
-		reference = cfg.RuntimeName()
+		reference = name
 	}
 	registry, err := kranzruntime.DefaultRegistry()
 	if err != nil {
@@ -524,13 +528,72 @@ func resolveSession(options kranzcli.GlobalOptions, requireProject bool) (kranzr
 	defer cancel()
 	record, err := registry.Resolve(ctx, reference, version)
 	if err != nil {
-		return kranzruntime.SessionRecord{}, classifyRuntimeError(err)
+		return kranzruntime.SessionRecord{}, classifyMissingRuntime(err, options, reference)
 	}
 	return record, nil
 }
 
+// classifyMissingRuntime turns "not found" into advice. A project that has not
+// been started is the most common reason any of these commands fails, and
+// naming the runtime the user never mentioned explains nothing: what they need
+// is the command that would make it exist.
+func classifyMissingRuntime(err error, options kranzcli.GlobalOptions, reference string) error {
+	classified := classifyRuntimeError(err)
+	var commandError *kranzcli.Error
+	if !errors.As(classified, &commandError) || commandError.Code != "runtime_not_found" {
+		return classified
+	}
+	if options.Project == "" {
+		return &kranzcli.Error{
+			Code:     "runtime_not_found",
+			Message:  fmt.Sprintf("this project has no runtime running (it would be called %q)", reference),
+			Hint:     "Start it with `kranz up -d`, or run `kranz ps` to see what is running.",
+			ExitCode: kranzcli.ExitNotFound,
+		}
+	}
+	return &kranzcli.Error{
+		Code:     "runtime_not_found",
+		Message:  commandError.Message,
+		Hint:     "Run `kranz ps` to see the runtimes that are active.",
+		ExitCode: kranzcli.ExitNotFound,
+	}
+}
+
+// runtimeNameFromDirectory reads the runtime name the working directory
+// declares. A directory with no configuration is a usage problem rather than a
+// missing runtime, so it says how to aim the command instead of reporting that
+// some unnamed runtime could not be found.
+func runtimeNameFromDirectory(options kranzcli.GlobalOptions) (string, error) {
+	original, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	if err := os.Chdir(options.Directory); err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Chdir(original) }() // best effort; command performs no work after resolution on failure
+	paths := options.ConfigPaths
+	if len(paths) == 0 {
+		paths, err = config.DiscoverFiles(".")
+		if err != nil {
+			return "", &kranzcli.Error{
+				Code:     "no_project",
+				Message:  "no Kranz configuration was found in this directory",
+				Hint:     "Run from a project directory, pass -f PATH, or name a runtime with -p NAME_OR_ID.",
+				ExitCode: kranzcli.ExitUsage,
+				Cause:    err,
+			}
+		}
+	}
+	cfg, err := config.LoadFiles(paths)
+	if err != nil {
+		return "", err
+	}
+	return cfg.RuntimeName(), nil
+}
+
 func runStatus(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
-	record, err := resolveSession(options, false)
+	record, err := resolveSession(options)
 	if err != nil {
 		return err
 	}
@@ -563,11 +626,15 @@ func runStatus(options kranzcli.GlobalOptions, args []string, stdout io.Writer) 
 		safe := make([]statusService, 0, len(services))
 		for _, service := range services {
 			var ready, alive *bool
-			if service.Health.Observed {
-				readyValue, aliveValue := service.Health.Ready, service.Health.Alive
-				ready, alive = &readyValue, &aliveValue
+			if service.Health.Observed && hasReadinessProbe(service) {
+				readyValue := service.Health.Ready
+				ready = &readyValue
 			}
-			safe = append(safe, statusService{Name: service.Name, State: service.State.Status.String(), PID: service.State.PID, Ready: ready, Alive: alive, DetectedPorts: service.DetectedPorts})
+			if service.Health.Observed && hasLivenessProbe(service) {
+				aliveValue := service.Health.Alive
+				alive = &aliveValue
+			}
+			safe = append(safe, statusService{Name: service.Name, State: service.State.Status.String(), PID: service.State.PID, Ready: ready, Alive: alive, DetectedPorts: emptyIntsIfNil(service.DetectedPorts)})
 		}
 		return kranzcli.WriteJSON(stdout, struct {
 			Session  kranzruntime.SessionMetadata `json:"session"`
@@ -575,21 +642,78 @@ func runStatus(options kranzcli.GlobalOptions, args []string, stdout io.Writer) 
 		}{record.SessionMetadata, safe})
 	}
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "NAME\tSTATE\tPID\tREADY")
+	_, _ = fmt.Fprintln(w, "NAME\tSTATE\tHEALTH\tUPTIME\tPID\tPORTS")
 	for _, service := range services {
-		ready := "-"
-		if service.Health.Observed {
-			ready = fmt.Sprint(service.Health.Ready)
-		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", service.Name, service.State.Status.String(), service.State.PID, ready)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			service.Name,
+			service.State.Status.String(),
+			healthLabel(service),
+			serviceUptime(service),
+			pidLabel(service.State.PID),
+			joinPortsOrDash(service.DetectedPorts),
+		)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	// The exit code of a stopped service is the first thing anyone asks about,
+	// and it does not fit a column that is empty for every healthy service.
+	for _, service := range services {
+		if service.State.ExitError != "" {
+			_, _ = fmt.Fprintf(stdout, "\n%s: %s\n", service.Name, service.State.ExitError)
+		}
+	}
+	return nil
 }
 
-func runLifecycle(options kranzcli.GlobalOptions, command string, args []string) error {
-	if options.Project == "" {
-		return &kranzcli.Error{Code: "missing_project", Message: "-p NAME_OR_ID is required", ExitCode: kranzcli.ExitUsage}
+// healthLabel reports configured probe state in words. Internally, missing
+// probes count as successful so they do not gate startup; presenting that
+// assumption as an observed "ready" result would give users a false green.
+func healthLabel(service *app.ServiceSnapshot) string {
+	hasReadiness, hasLiveness := hasReadinessProbe(service), hasLivenessProbe(service)
+	if !hasReadiness && !hasLiveness {
+		return "-"
 	}
+	if !service.Health.Observed {
+		return "checking"
+	}
+	if hasLiveness && !service.Health.Alive {
+		return "unhealthy"
+	}
+	if hasReadiness {
+		if service.Health.Ready {
+			return "ready"
+		}
+		return "not ready"
+	}
+	return "alive"
+}
+
+func hasReadinessProbe(service *app.ServiceSnapshot) bool {
+	return service.Config.HealthCheck != nil && service.Config.HealthCheck.Readiness != nil
+}
+
+func hasLivenessProbe(service *app.ServiceSnapshot) bool {
+	return service.Config.HealthCheck != nil && service.Config.HealthCheck.Liveness != nil
+}
+
+// pidLabel hides the zero a detached or stopped service reports. Printing 0 as
+// a process id says something untrue about a service that is running fine.
+func pidLabel(pid int) string {
+	if pid <= 0 {
+		return "-"
+	}
+	return strconv.Itoa(pid)
+}
+
+func serviceUptime(service *app.ServiceSnapshot) string {
+	if service.State.Status != config.StatusRunning || service.State.StartedAt.IsZero() {
+		return "-"
+	}
+	return shortDuration(time.Since(service.State.StartedAt))
+}
+
+func runLifecycle(options kranzcli.GlobalOptions, command string, args []string, stdout io.Writer) error {
 	if command == "reload" {
 		if len(args) != 0 {
 			return &kranzcli.Error{Code: "invalid_arguments", Message: "reload does not accept selectors", ExitCode: kranzcli.ExitUsage}
@@ -597,7 +721,7 @@ func runLifecycle(options kranzcli.GlobalOptions, command string, args []string)
 	} else if len(args) == 0 {
 		return &kranzcli.Error{Code: "missing_selector", Message: command + " requires at least one service or tag selector", ExitCode: kranzcli.ExitUsage}
 	}
-	record, err := resolveSession(options, true)
+	record, err := resolveSession(options)
 	if err != nil {
 		return err
 	}
@@ -607,20 +731,119 @@ func runLifecycle(options kranzcli.GlobalOptions, command string, args []string)
 	}
 	defer func() { _ = client.Close() }()
 	if command == "reload" {
-		_, err = client.Reload(true)
-		return err
+		result, reloadErr := client.Reload(true)
+		if reloadErr != nil {
+			return reloadErr
+		}
+		return reportReload(stdout, options, record.Name, result)
 	}
 	names, err := resolveServiceSelectors(client.Config(), args)
 	if err != nil {
 		return err
 	}
+	// stop and restart expand to dependents, so what the user named is not what
+	// the command touched. The expansion is read before acting, while the
+	// services are still in the state that produced it.
+	affected := names
+	if command == "stop" || command == "restart" {
+		affected = expandToDependents(client, names)
+	}
 	switch command {
 	case "start":
-		return client.StartServicesContext(context.Background(), names)
+		err = client.StartServicesContext(context.Background(), names)
 	case "stop":
-		return client.StopServices(names)
+		err = client.StopServices(names)
 	case "restart":
-		return client.RestartServices(names)
+		err = client.RestartServices(names)
+	}
+	if err != nil {
+		return err
+	}
+	names = affected
+	// A command that changes something says what it changed. Silence is
+	// indistinguishable from a no-op, and a selector that expands to dependents
+	// changes more than the user named.
+	return reportLifecycle(stdout, options, command, names)
+}
+
+// expandToDependents returns the services a stop or restart will actually
+// touch, in the runtime's own order, without repeating one twice.
+func expandToDependents(client *kranzruntime.Client, names []string) []string {
+	seen := make(map[string]bool, len(names))
+	expanded := make([]string, 0, len(names))
+	for _, name := range names {
+		for _, affected := range client.AffectedServices(name) {
+			if seen[affected] {
+				continue
+			}
+			seen[affected] = true
+			expanded = append(expanded, affected)
+		}
+		if !seen[name] {
+			seen[name] = true
+			expanded = append(expanded, name)
+		}
+	}
+	return expanded
+}
+
+var lifecyclePastTense = map[string]string{"start": "Started", "stop": "Stopped", "restart": "Restarted"}
+
+type lifecycleCommandResult struct {
+	Command  string   `json:"command"`
+	Services []string `json:"services"`
+}
+
+func reportLifecycle(stdout io.Writer, options kranzcli.GlobalOptions, command string, names []string) error {
+	if options.Output == kranzcli.OutputJSON {
+		return kranzcli.WriteJSON(stdout, lifecycleCommandResult{Command: command, Services: emptyIfNil(names)})
+	}
+	_, err := fmt.Fprintf(stdout, "%s %s.\n", lifecyclePastTense[command], strings.Join(names, ", "))
+	return err
+}
+
+type reloadCommandResult struct {
+	Command   string   `json:"command"`
+	Runtime   string   `json:"runtime"`
+	Changed   bool     `json:"changed"`
+	Added     []string `json:"added"`
+	Removed   []string `json:"removed"`
+	Restarted []string `json:"restarted"`
+	Updated   []string `json:"updated"`
+}
+
+func reportReload(stdout io.Writer, options kranzcli.GlobalOptions, name string, result app.ReloadResult) error {
+	changed := len(result.Added) + len(result.Removed) + len(result.Restarted) + len(result.Updated)
+	if options.Output == kranzcli.OutputJSON {
+		return kranzcli.WriteJSON(stdout, reloadCommandResult{
+			Command: "reload", Runtime: name, Changed: changed > 0,
+			Added: emptyIfNil(result.Added), Removed: emptyIfNil(result.Removed),
+			Restarted: emptyIfNil(result.Restarted), Updated: emptyIfNil(result.Updated),
+		})
+	}
+	if changed == 0 {
+		_, err := fmt.Fprintf(stdout, "Reloaded %s. Nothing changed.\n", name)
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "Reloaded %s.\n", name); err != nil {
+		return err
+	}
+	// Ordered explicitly: a map would print the same reload differently on
+	// consecutive runs.
+	for _, group := range []struct {
+		label    string
+		services []string
+	}{
+		{"added", result.Added},
+		{"removed", result.Removed},
+		{"restarted", result.Restarted},
+		{"updated", result.Updated},
+	} {
+		if len(group.services) > 0 {
+			if _, err := fmt.Fprintf(stdout, "  %s: %s\n", group.label, strings.Join(group.services, ", ")); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -655,16 +878,26 @@ func resolveServiceSelectors(cfg *config.Config, selectors []string) ([]string, 
 	return names, nil
 }
 
-func runDown(options kranzcli.GlobalOptions, args []string) error {
+func runDown(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
 	force := false
 	for _, arg := range args {
 		if arg == "--force" {
 			force = true
 			continue
 		}
-		return &kranzcli.Error{Code: "unknown_option", Message: "unknown down option " + arg, ExitCode: kranzcli.ExitUsage}
+		if strings.HasPrefix(arg, "-") {
+			return &kranzcli.Error{Code: "unknown_option", Message: fmt.Sprintf("unknown down option %q", arg), ExitCode: kranzcli.ExitUsage}
+		}
+		// down is deliberately project-wide. A service name here is a
+		// misdirected stop, not a malformed flag, so it is answered as one.
+		return &kranzcli.Error{
+			Code:     "invalid_arguments",
+			Message:  "down stops the whole runtime and does not take service selectors",
+			Hint:     fmt.Sprintf("Stop one service with `kranz stop %s`, or stop everything with `kranz down`.", arg),
+			ExitCode: kranzcli.ExitUsage,
+		}
 	}
-	record, err := resolveSession(options, true)
+	record, err := resolveSession(options)
 	if err != nil {
 		return err
 	}
@@ -672,7 +905,10 @@ func runDown(options kranzcli.GlobalOptions, args []string) error {
 	client, dialErr := kranzruntime.DialContext(dialCtx, record.Socket, version)
 	cancel()
 	if dialErr == nil {
-		return client.Shutdown()
+		if err := client.Shutdown(); err != nil {
+			return err
+		}
+		return reportDown(stdout, options, record.Name, record.ID, false)
 	}
 	if !force {
 		return classifyRuntimeError(dialErr)
@@ -686,13 +922,35 @@ func runDown(options kranzcli.GlobalOptions, args []string) error {
 	if err := registry.ForceDown(forceCtx, record); err != nil {
 		return classifyRuntimeError(err)
 	}
-	return nil
+	return reportDown(stdout, options, record.Name, record.ID, true)
+}
+
+// reportDown names the runtime that stopped. A bare prompt after `down` leaves
+// the user checking `ps` to find out whether anything happened, and a forced
+// stop is worth distinguishing from an orderly one.
+type downCommandResult struct {
+	Command string `json:"command"`
+	Runtime string `json:"runtime"`
+	ID      string `json:"id"`
+	Forced  bool   `json:"forced"`
+}
+
+func reportDown(stdout io.Writer, options kranzcli.GlobalOptions, name, id string, forced bool) error {
+	if options.Output == kranzcli.OutputJSON {
+		return kranzcli.WriteJSON(stdout, downCommandResult{Command: "down", Runtime: name, ID: id, Forced: forced})
+	}
+	if forced {
+		_, err := fmt.Fprintf(stdout, "Force-stopped %s (%s). Services it owned may have survived; check with `kranz ps`.\n", name, shortID(id))
+		return err
+	}
+	_, err := fmt.Fprintf(stdout, "Stopped %s (%s).\n", name, shortID(id))
+	return err
 }
 
 func classifyRuntimeError(err error) error {
 	var conflict *kranzruntime.SessionConflictError
 	if errors.As(err, &conflict) {
-		return &kranzcli.Error{Code: "runtime_conflict", Message: conflict.Error(), Hint: "Use `kranz -p " + conflict.Name + " status` or `kranz -p " + conflict.Name + " down`.", ExitCode: kranzcli.ExitConflict}
+		return &kranzcli.Error{Code: "runtime_conflict", Message: conflict.Error(), Hint: "Inspect it with `kranz status`, stop it with `kranz down`, or start a second one with `kranz -p " + conflict.Name + "-2 up -d`.", ExitCode: kranzcli.ExitConflict}
 	}
 	var missing *kranzruntime.SessionNotFoundError
 	if errors.As(err, &missing) {

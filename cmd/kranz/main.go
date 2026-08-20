@@ -50,9 +50,130 @@ func execute(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	// A command whose grammar is reserved but whose execution a later feature
+	// stream still has to attach is refused from the tree itself, so help and
+	// dispatch can never disagree about what this build supports.
+	if len(invocation.CommandPath) > 0 {
+		if command, resolveErr := tree.Resolve(invocation.CommandPath); resolveErr == nil && command.IsPlanned() {
+			err := &kranzcli.Error{
+				Code:     "not_implemented",
+				Message:  fmt.Sprintf("command %q is not implemented yet", invocation.Command()),
+				Hint:     "It is planned for v0.8.0. Run `kranz --help` for the commands this build supports.",
+				ExitCode: kranzcli.ExitUsage,
+			}
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+	}
+
 	if invocation.Command() == "version" {
 		return writeVersion(stdout, stderr, invocation.Globals.Output)
 	}
+	// The inspection commands describe a project from its configuration and
+	// never touch a runtime, so they are dispatched before anything that
+	// resolves a session.
+	switch invocation.Command() {
+	case "config check":
+		if err := runConfigCheck(invocation.Globals, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "init":
+		if err := runInit(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "config show":
+		if err := runConfigShow(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "config explain":
+		if err := runConfigExplain(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "doctor":
+		if err := runDoctor(invocation.Globals, stdout); err != nil {
+			var requested requestedExitError
+			if errors.As(err, &requested) {
+				return requested.code
+			}
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "list":
+		if err := runList(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "info":
+		if err := runInfo(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "plan":
+		if err := runPlan(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "graph":
+		if err := runGraph(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "ports":
+		if err := runPorts(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "logs":
+		if err := runLogs(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "completion":
+		if len(invocation.Args) != 1 {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, &kranzcli.Error{
+				Code:     "invalid_arguments",
+				Message:  "completion takes exactly one shell",
+				Hint:     "Run `kranz completion bash`, `kranz completion zsh`, or `kranz completion fish`.",
+				ExitCode: kranzcli.ExitUsage,
+			})
+		}
+		script, err := kranzcli.Completion(tree, invocation.Args[0])
+		if err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		if _, err := fmt.Fprint(stdout, script); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "action list":
+		if err := runActionList(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "action info":
+		if err := runActionInfo(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "action run":
+		if err := runActionRun(invocation.Globals, invocation.Args, stdout); err != nil {
+			var requested requestedExitError
+			if errors.As(err, &requested) {
+				return requested.code
+			}
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	case "port inspect":
+		if err := runPortInspect(invocation.Globals, invocation.Args, stdout); err != nil {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
+		}
+		return 0
+	}
+
 	if invocation.Command() == "ps" {
 		if len(invocation.Args) != 0 {
 			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, &kranzcli.Error{Code: "invalid_arguments", Message: "ps does not accept arguments", ExitCode: kranzcli.ExitUsage})
@@ -60,9 +181,6 @@ func execute(args []string, stdout, stderr io.Writer) int {
 		return runPS(invocation.Globals, stdout, stderr)
 	}
 	if invocation.Command() == "up" {
-		if invocation.Globals.Output != kranzcli.OutputText {
-			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, &kranzcli.Error{Code: "invalid_output", Message: "foreground up requires text output", ExitCode: kranzcli.ExitUsage})
-		}
 		if err := runUp(invocation.Globals, invocation.Args, stdout); err != nil {
 			var requested requestedExitError
 			if errors.As(err, &requested) {
@@ -79,24 +197,14 @@ func execute(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if command := invocation.Command(); command == "start" || command == "stop" || command == "restart" || command == "reload" {
-		if err := runLifecycle(invocation.Globals, command, invocation.Args); err != nil {
+		if err := runLifecycle(invocation.Globals, command, invocation.Args, stdout); err != nil {
 			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
-		}
-		if invocation.Globals.Output == kranzcli.OutputJSON {
-			if err := kranzcli.WriteJSON(stdout, struct{}{}); err != nil {
-				return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
-			}
 		}
 		return 0
 	}
 	if invocation.Command() == "down" {
-		if err := runDown(invocation.Globals, invocation.Args); err != nil {
+		if err := runDown(invocation.Globals, invocation.Args, stdout); err != nil {
 			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
-		}
-		if invocation.Globals.Output == kranzcli.OutputJSON {
-			if err := kranzcli.WriteJSON(stdout, struct{}{}); err != nil {
-				return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, err)
-			}
 		}
 		return 0
 	}
@@ -171,9 +279,11 @@ func runPS(options kranzcli.GlobalOptions, stdout, stderr io.Writer) int {
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "ID\tNAME\tPROJECT\tMODE\tSERVICES\tSTATE\tUPTIME")
 	for _, record := range records {
+		// A bare total says nothing about whether the project is actually up.
+		// An unreachable runtime reports "-" rather than a count it cannot know.
 		services := "-"
-		if record.Services != nil {
-			services = fmt.Sprint(*record.Services)
+		if record.Services != nil && record.Running != nil {
+			services = fmt.Sprintf("%d/%d", *record.Running, *record.Services)
 		}
 		id := record.ID
 		if len(id) > 8 {
@@ -187,15 +297,24 @@ func runPS(options kranzcli.GlobalOptions, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// shortDuration renders an age the way a person reads one: the largest unit
+// that still says something, never a run of trailing zero units. Every command
+// that shows an age uses it, so `ps` and `status` cannot disagree about what
+// eight minutes looks like.
 func shortDuration(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
-	d = d.Round(time.Second)
-	if d < time.Minute {
-		return d.String()
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
 	}
-	return d.Round(time.Minute).String()
 }
 
 func writeVersion(stdout, stderr io.Writer, format kranzcli.OutputFormat) int {

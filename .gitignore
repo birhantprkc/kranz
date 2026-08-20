@@ -31,3 +31,9 @@ docs/.vitepress/dist/
 
 # Local agent workflow state
 .agents/
+
+# Example runtime markers
+examples/*/.kranz-demo/
+
+# Generated shell completions for packaging
+completions/

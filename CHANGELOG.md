@@ -4,6 +4,80 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-21
+
+### Added
+
+- A complete command-line workflow over one project runtime. `kranz up -d`
+  leaves a project running in the background; `kranz ps`, `status`, `logs`,
+  `start`, `stop`, `restart`, `reload`, `attach`, and `down` drive it from any
+  terminal, and `down --force` recovers a session that has stopped answering.
+- `kranz init` creates a configuration, as a wizard when there is a terminal
+  and from flags when there is not. It converts an existing Kranz, Process
+  Compose, or Procfile source, offers `package.json` scripts as actions without
+  running them, previews the file before writing it, never replaces an existing
+  file without consent, and reloads what it wrote before reporting success.
+- Project inspection that needs no running runtime: `config check`,
+  `config show` with secrets redacted, `config explain` for per-field
+  provenance, `doctor`, `list`, `info`, `plan`, `graph`, `ports`, and
+  `port inspect`. `plan` prints the same dependency waves the supervisor gates
+  readiness on.
+- `kranz logs` with selectors, `--tail`, `--since`, and `--follow`. Log entries
+  carry a source and a monotonic sequence, both preserved across a hot reload,
+  so following resumes from a cursor instead of reprinting. A stopped service
+  keeps its buffer.
+- `kranz action list`, `action info`, and `action run`. An action is identified
+  by owner and name together, and a failed action fails the command.
+- `kranz completion` for bash, zsh, and fish, generated from the command tree so
+  a shell cannot offer a command the binary does not have.
+- `--output json` on non-interactive result commands, wrapping results and
+  failures in one versioned envelope, with exit codes that distinguish usage,
+  configuration, missing, conflicting, and unavailable. Mutation results name
+  the runtime and services they changed; `init` and `up -d` report the
+  resources they created, and failed diagnostics remain one valid result
+  envelope with a non-zero exit code.
+- Linux `.deb` and `.rpm` packages for amd64 and arm64, installing the binary,
+  the shell completions, and the documentation. Package verification pins the
+  container platform to the package architecture, so it also works from an
+  Apple Silicon release machine; set `PACKAGE_ARCH=arm64` to test arm64.
+
+### Changed
+
+- A command group runs its obvious subcommand when invoked bare: `kranz config`
+  shows the configuration, `kranz action` lists actions, and `kranz port 8080`
+  inspects that port.
+- `kranz ports` reports the ports a running runtime saw its services open, not
+  only the ports the configuration declares.
+- `kranz status` reports health, uptime, and detected ports, and shows `-`
+  rather than `0` for a service that has no process of its own. `kranz ps`
+  reports running and total services instead of a bare total.
+- A service with no configured readiness or liveness probe now shows `-`
+  instead of the misleading `ready`; JSON uses `null` for unconfigured
+  probes.
+- `kranz info SERVICE` adds what the service is doing right now when a runtime
+  is up.
+- `start`, `stop`, `restart`, `reload`, and `down` say what they changed. A stop
+  that expands to dependents names all of them.
+- A bare `kranz logs` returns the last fifty lines instead of every buffered
+  line; `--all` returns everything.
+- `kranz graph` draws a dependency tree instead of listing each service with its
+  dependencies indented beneath it.
+- `kranz config explain` on a single-layer project says every field comes from
+  that layer instead of repeating the filename on every row, and lists only
+  leaf fields rather than every mapping on the way down.
+- A command that needs a runtime the project has not started now says how to
+  start one instead of reporting that a runtime the user never named is missing.
+- The positional configuration form is removed. `kranz prod.yaml` becomes
+  `kranz -f prod.yaml`, and the old shape is recognised and answered with that
+  correction. Bare `kranz` still opens the TUI and every existing configuration
+  file loads unchanged.
+- `-p` is optional for every command. Without it, the target runtime is the one
+  the working directory's configuration names; with it, the explicit value
+  always wins, including from a directory that has a project of its own.
+  Previously `status` resolved the runtime from the directory while `start`,
+  `stop`, `restart`, `reload`, and `down` required `-p`, so a service the tool
+  had just listed could not be acted on without naming the project again.
+
 ## [0.7.2] - 2026-08-18
 
 ### Fixed
@@ -250,7 +324,8 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 - Explicit global-user and project-config save destinations in the live theme picker.
 - Native compatibility for common Process Compose configurations.
 
-[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/kranz-org/kranz/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/kranz-org/kranz/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/kranz-org/kranz/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/kranz-org/kranz/compare/v0.6.1...v0.7.0

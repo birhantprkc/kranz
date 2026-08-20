@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -20,6 +21,21 @@ import (
 	kranzcli "github.com/kranz-org/kranz/internal/cli"
 	kranzruntime "github.com/kranz-org/kranz/internal/runtime"
 )
+
+func decodeJSONData[T any](t *testing.T, output []byte) T {
+	t.Helper()
+	var envelope struct {
+		SchemaVersion int `json:"schema_version"`
+		Data          T   `json:"data"`
+	}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		t.Fatalf("invalid JSON envelope %q: %v", output, err)
+	}
+	if envelope.SchemaVersion != kranzcli.SchemaVersion {
+		t.Fatalf("schema_version = %d, want %d", envelope.SchemaVersion, kranzcli.SchemaVersion)
+	}
+	return envelope.Data
+}
 
 func TestVersionTextAndJSON(t *testing.T) {
 	previousVersion, previousCommit, previousBuildTime := version, commit, buildTime
@@ -74,7 +90,7 @@ func TestBackgroundHelperProcess(t *testing.T) {
 func TestBackgroundRuntimeReadinessConflictAndDown(t *testing.T) {
 	directory := t.TempDir()
 	name := fmt.Sprintf("test-background-%d", os.Getpid())
-	configText := fmt.Sprintf("project: Test Background\nruntime:\n  name: %s\nservices:\n  sleeper:\n    command: sleep 60\n    tags: [workers]\n", name)
+	configText := fmt.Sprintf("project: Test Background\nruntime:\n  name: %s\nservices:\n  sleeper:\n    command: sleep 60\n    tags: [workers]\n    actions:\n      ping:\n        command: echo pong\n", name)
 	if err := os.WriteFile(filepath.Join(directory, "kranz.yaml"), []byte(configText), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -87,11 +103,12 @@ func TestBackgroundRuntimeReadinessConflictAndDown(t *testing.T) {
 	}
 	defer func() { newBackgroundCommand = previousFactory }()
 	var stdout, stderr bytes.Buffer
-	if code := execute([]string{"-C", directory, "up", "-d", "--no-start"}, &stdout, &stderr); code != 0 {
+	if code := execute([]string{"-C", directory, "--output=json", "up", "-d", "--no-start"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("up -d exit=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Started "+name) {
-		t.Fatalf("readiness output = %q", stdout.String())
+	started := decodeJSONData[backgroundStartResult](t, stdout.Bytes())
+	if started.Name != name || started.ID == "" || started.PID <= 0 || started.Mode != "background" {
+		t.Fatalf("background start = %#v", started)
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -103,24 +120,74 @@ func TestBackgroundRuntimeReadinessConflictAndDown(t *testing.T) {
 	if code := execute([]string{"-p", name, "status", "--output=json"}, &stdout, &stderr); code != 0 || !json.Valid(stdout.Bytes()) {
 		t.Fatalf("status exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
+	status := decodeJSONData[struct {
+		Services []struct {
+			Name  string `json:"name"`
+			Ready *bool  `json:"ready"`
+			Alive *bool  `json:"alive"`
+		} `json:"services"`
+	}](t, stdout.Bytes())
+	if len(status.Services) != 1 || status.Services[0].Name != "sleeper" ||
+		status.Services[0].Ready != nil || status.Services[0].Alive != nil {
+		t.Fatalf("status without configured probes = %#v", status.Services)
+	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := execute([]string{"-p", name, "start", "workers"}, &stdout, &stderr); code != 0 {
+	if code := execute([]string{"-p", name, "--output=json", "start", "workers"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("start tag exit=%d stderr=%s", code, stderr.String())
 	}
-	if code := execute([]string{"-p", name, "restart", "sleeper"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("restart exit=%d stderr=%s", code, stderr.String())
-	}
-	if code := execute([]string{"-p", name, "stop", "sleeper"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("stop exit=%d stderr=%s", code, stderr.String())
-	}
-	if code := execute([]string{"-p", name, "reload"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("reload exit=%d stderr=%s", code, stderr.String())
+	result := decodeJSONData[lifecycleCommandResult](t, stdout.Bytes())
+	if result.Command != "start" || !slices.Equal(result.Services, []string{"sleeper"}) {
+		t.Fatalf("start result = %#v", result)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := execute([]string{"-p", name, "down"}, &stdout, &stderr); code != 0 {
+	if code := execute([]string{"-p", name, "--output=json", "action", "run", "sleeper/ping"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("action run exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	action := decodeJSONData[struct {
+		ID     string   `json:"id"`
+		Stdout []string `json:"stdout"`
+		Stderr []string `json:"stderr"`
+	}](t, stdout.Bytes())
+	if action.ID != "sleeper/ping" || len(action.Stdout) != 1 || action.Stderr == nil || len(action.Stderr) != 0 {
+		t.Fatalf("action result = %#v", action)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "--output=json", "restart", "sleeper"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("restart exit=%d stderr=%s", code, stderr.String())
+	}
+	result = decodeJSONData[lifecycleCommandResult](t, stdout.Bytes())
+	if result.Command != "restart" || !slices.Equal(result.Services, []string{"sleeper"}) {
+		t.Fatalf("restart result = %#v", result)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "--output=json", "stop", "sleeper"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("stop exit=%d stderr=%s", code, stderr.String())
+	}
+	result = decodeJSONData[lifecycleCommandResult](t, stdout.Bytes())
+	if result.Command != "stop" || !slices.Equal(result.Services, []string{"sleeper"}) {
+		t.Fatalf("stop result = %#v", result)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "--output=json", "reload"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("reload exit=%d stderr=%s", code, stderr.String())
+	}
+	reloaded := decodeJSONData[reloadCommandResult](t, stdout.Bytes())
+	if reloaded.Command != "reload" || reloaded.Runtime != name || reloaded.Changed {
+		t.Fatalf("reload result = %#v", reloaded)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "--output=json", "down"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("down exit=%d stderr=%s", code, stderr.String())
+	}
+	stopped := decodeJSONData[downCommandResult](t, stdout.Bytes())
+	if stopped.Command != "down" || stopped.Runtime != name || stopped.ID == "" || stopped.Forced {
+		t.Fatalf("down result = %#v", stopped)
 	}
 	registry, err := kranzruntime.DefaultRegistry()
 	if err != nil {
@@ -176,8 +243,12 @@ func TestForceDownRecoversUnreachableBackgroundRuntime(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := execute([]string{"-p", name, "down", "--force"}, &stdout, &stderr); code != 0 {
+	if code := execute([]string{"-p", name, "--output=json", "down", "--force"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("down --force exit=%d stderr=%s", code, stderr.String())
+	}
+	stopped := decodeJSONData[downCommandResult](t, stdout.Bytes())
+	if stopped.Runtime != name || stopped.ID != record.ID || !stopped.Forced {
+		t.Fatalf("forced down result = %#v", stopped)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -192,6 +263,107 @@ func TestForceDownRecoversUnreachableBackgroundRuntime(t *testing.T) {
 			t.Fatalf("forced runtime remained registered: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestLogsSnapshotFollowAndClientInterrupt(t *testing.T) {
+	directory := t.TempDir()
+	name := fmt.Sprintf("test-logs-%d", os.Getpid())
+	configText := fmt.Sprintf("project: Test Logs\nruntime:\n  name: %s\nservices:\n  emitter:\n    command: echo out-line; echo err-line >&2\n", name)
+	if err := os.WriteFile(filepath.Join(directory, "kranz.yaml"), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousFactory := newBackgroundCommand
+	newBackgroundCommand = func(_ string, args ...string) *exec.Cmd {
+		data, _ := json.Marshal(args)
+		command := exec.Command(os.Args[0], "-test.run=^TestBackgroundHelperProcess$")
+		command.Env = append(os.Environ(), "KRANZ_TEST_BACKGROUND_HELPER=1", "KRANZ_TEST_BACKGROUND_ARGS="+base64.StdEncoding.EncodeToString(data))
+		return command
+	}
+	defer func() { newBackgroundCommand = previousFactory }()
+	var stdout, stderr bytes.Buffer
+	if code := execute([]string{"-C", directory, "up", "-d", "--no-start"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("up -d exit=%d stderr=%s", code, stderr.String())
+	}
+	t.Cleanup(func() { _ = execute([]string{"-p", name, "down"}, io.Discard, io.Discard) })
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "start", "emitter"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("start exit=%d stderr=%s", code, stderr.String())
+	}
+	registry, err := kranzruntime.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	record, err := registry.Resolve(ctx, name, "test")
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := kranzruntime.Dial(record.Socket, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		entries := client.Logs("emitter")
+		hasStdout, hasStderr := false, false
+		for _, entry := range entries {
+			hasStdout = hasStdout || entry.Source == "stdout"
+			hasStderr = hasStderr || entry.Source == "stderr"
+		}
+		if hasStdout && hasStderr {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process streams were not captured: %+v", entries)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = client.Close()
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "logs", "emitter"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("logs exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[emitter/stdout]") || !strings.Contains(stdout.String(), "[emitter/stderr]") {
+		t.Fatalf("text logs lost identity:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	if code := execute([]string{"-p", name, "logs", "emitter", "--since=1h", "--output=json"}, &stdout, &stderr); code != 0 || !json.Valid(stdout.Bytes()) {
+		t.Fatalf("JSON logs exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	data, _ := json.Marshal([]string{"-p", name, "logs", "emitter", "--follow", "--tail=0"})
+	follow := exec.Command(os.Args[0], "-test.run=^TestBackgroundHelperProcess$")
+	follow.Env = append(os.Environ(), "KRANZ_TEST_BACKGROUND_HELPER=1", "KRANZ_TEST_BACKGROUND_ARGS="+base64.StdEncoding.EncodeToString(data))
+	var followOut, followErr bytes.Buffer
+	follow.Stdout, follow.Stderr = &followOut, &followErr
+	if err := follow.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if code := execute([]string{"-p", name, "restart", "emitter"}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("restart during follow exit=%d stderr=%s", code, stderr.String())
+	}
+	time.Sleep(300 * time.Millisecond)
+	if err := follow.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	if err := follow.Wait(); err != nil {
+		t.Fatalf("follow interrupted with %v; stderr=%s", err, followErr.String())
+	}
+	if !strings.Contains(followOut.String(), "[emitter/") {
+		t.Fatalf("follow did not stream new events: %s", followOut.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-p", name, "status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("runtime stopped with logs client: exit=%d stderr=%s", code, stderr.String())
+	}
+	if code := execute([]string{"-p", name, "down"}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("down exit=%d stderr=%s", code, stderr.String())
 	}
 }
 
@@ -344,5 +516,106 @@ func TestUsageErrorWithJSONKeepsStderrClean(t *testing.T) {
 	}
 	if stderr.Len() != 0 || !json.Valid(stdout.Bytes()) {
 		t.Fatalf("stdout/stderr = %q/%q", stdout.String(), stderr.String())
+	}
+}
+
+// Lifecycle commands used to demand -p while status resolved the runtime from
+// the working directory, so `kranz status` listed services that `kranz stop`
+// then refused to touch. Every command now resolves the same way, and -p stays
+// available to aim a command at a different project from this one's directory.
+func TestLifecycleResolvesRuntimeFromDirectory(t *testing.T) {
+	directory := t.TempDir()
+	name := fmt.Sprintf("test-directory-%d", os.Getpid())
+	configText := fmt.Sprintf("project: Test Directory\nruntime:\n  name: %s\nservices:\n  sleeper:\n    command: sleep 60\n    tags: [workers]\n", name)
+	if err := os.WriteFile(filepath.Join(directory, "kranz.yaml"), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A second project directory that declares a runtime of its own, used to
+	// prove -p still wins over whatever the working directory names.
+	other := t.TempDir()
+	otherText := fmt.Sprintf("project: Test Other\nruntime:\n  name: %s-other\nservices:\n  sleeper:\n    command: sleep 60\n", name)
+	if err := os.WriteFile(filepath.Join(other, "kranz.yaml"), []byte(otherText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	previousFactory := newBackgroundCommand
+	newBackgroundCommand = func(_ string, args ...string) *exec.Cmd {
+		data, _ := json.Marshal(args)
+		command := exec.Command(os.Args[0], "-test.run=^TestBackgroundHelperProcess$")
+		command.Env = append(os.Environ(), "KRANZ_TEST_BACKGROUND_HELPER=1", "KRANZ_TEST_BACKGROUND_ARGS="+base64.StdEncoding.EncodeToString(data))
+		return command
+	}
+	defer func() { newBackgroundCommand = previousFactory }()
+
+	var stdout, stderr bytes.Buffer
+	if code := execute([]string{"-C", directory, "up", "-d", "--no-start"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("up -d exit=%d stderr=%s", code, stderr.String())
+	}
+	defer func() {
+		var out, errOut bytes.Buffer
+		_ = execute([]string{"-p", name, "down"}, &out, &errOut)
+	}()
+
+	for _, command := range [][]string{
+		{"-C", directory, "status"},
+		{"-C", directory, "start", "workers"},
+		{"-C", directory, "restart", "sleeper"},
+		{"-C", directory, "stop", "sleeper"},
+		{"-C", directory, "reload"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := execute(command, &stdout, &stderr); code != 0 {
+			t.Fatalf("%v exit=%d stderr=%s", command, code, stderr.String())
+		}
+	}
+
+	// From a directory owning a different project, -p still selects this one.
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-C", other, "-p", name, "status"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("-p override exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "sleeper") {
+		t.Fatalf("-p override status = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := execute([]string{"-C", directory, "down"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("down exit=%d stderr=%s", code, stderr.String())
+	}
+}
+
+// `kranz down SERVICE` answered "unknown down option SERVICE", calling a
+// positional selector an option and saying nothing about the command that does
+// what the user asked for.
+func TestDownRejectsServiceSelectorWithStopHint(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := execute([]string{"down", "im-core"}, &stdout, &stderr); code != kranzcli.ExitUsage {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
+	}
+	output := stderr.String()
+	if !strings.Contains(output, "does not take service selectors") {
+		t.Errorf("down rejection does not explain itself: %q", output)
+	}
+	if !strings.Contains(output, "kranz stop im-core") {
+		t.Errorf("down rejection does not point at stop: %q", output)
+	}
+}
+
+// Without -p the runtime comes from the working directory, so a directory that
+// is not a project has to say that rather than report a missing runtime.
+func TestLifecycleOutsideAProjectExplainsHowToAim(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := execute([]string{"-C", t.TempDir(), "stop", "api"}, &stdout, &stderr)
+	if code != kranzcli.ExitUsage {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "no Kranz configuration was found") {
+		t.Errorf("error does not name the real problem: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-p NAME_OR_ID") {
+		t.Errorf("error does not offer -p: %q", stderr.String())
 	}
 }
