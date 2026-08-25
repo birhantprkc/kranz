@@ -26,6 +26,7 @@ const reloadDebounce = time.Second
 // it to the running services. A concurrent Reload call while one is already
 // in flight is a no-op, reported as (ReloadResult{}, nil).
 func (l *Local) Reload(force bool) (ReloadResult, error) {
+	l.invalidateConfirmations()
 	l.cfgMu.Lock()
 	if len(l.configPaths) == 0 {
 		l.cfgMu.Unlock()
@@ -79,9 +80,11 @@ func (l *Local) Reload(force bool) (ReloadResult, error) {
 	l.cfg = next
 	l.watchPaths = watchedConfigPaths(l.configPaths, next.WatchPaths)
 	l.generation++
+	generation := l.generation
 	l.loadedAt = time.Now()
 	l.lastReloadErr = ""
 	l.cfgMu.Unlock()
+	l.recordReloadTransition(generation, result)
 	if stamps, err := readConfigStamps(l.watchPathsSnapshot()); err == nil {
 		l.recordReloadStamps(stamps)
 	}

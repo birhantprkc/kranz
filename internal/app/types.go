@@ -30,12 +30,13 @@ var ResolveCheckTarget = health.ResolveCheckTarget
 // String method, while letting every other package reference them through
 // app instead of importing internal/service itself.
 type (
-	ActionResult      = service.ActionResult
-	ActionStatus      = service.ActionStatus
-	ReloadResult      = service.ReloadResult
-	PortConflictError = service.PortConflictError
-	ActionBusyError   = service.ActionBusyError
-	ActionExitError   = service.ActionExitError
+	ActionResult          = service.ActionResult
+	ActionStatus          = service.ActionStatus
+	ReloadResult          = service.ReloadResult
+	PortConflictError     = service.PortConflictError
+	ActionBusyError       = service.ActionBusyError
+	ActionExitError       = service.ActionExitError
+	ActionRunEvictedError = service.ActionRunEvictedError
 )
 
 // Re-exported so a caller never has to import internal/service for a
@@ -51,6 +52,7 @@ const (
 
 var (
 	ErrActionNotFound       = service.ErrActionNotFound
+	ErrActionRunNotFound    = service.ErrActionRunNotFound
 	ErrActionRunnerStopping = service.ErrActionRunnerStopping
 	ErrInteractiveAction    = service.ErrInteractiveAction
 )
@@ -59,11 +61,17 @@ var (
 // Observed is false until health monitoring has produced a first result for
 // the service, mirroring health.Checker.GetHealth returning nil.
 type HealthSnapshot struct {
-	Observed   bool
-	Ready      bool
-	Alive      bool
-	ReadySince time.Time
-	LastCheck  time.Time
+	Observed   bool      `json:"observed"`
+	Ready      bool      `json:"ready"`
+	Alive      bool      `json:"alive"`
+	ReadySince time.Time `json:"ready_since,omitempty"`
+	LastCheck  time.Time `json:"last_check,omitempty"`
+	// Readiness and Liveness carry the probe target and its last error. Ready
+	// and Alive say whether a probe passes; these say what it contacted and
+	// what came back, which is the part a reader otherwise reconstructs from
+	// health history text.
+	Readiness health.ProbeState `json:"readiness"`
+	Liveness  health.ProbeState `json:"liveness"`
 }
 
 // ServiceSnapshot is a point-in-time, concurrency-safe copy of one service's
@@ -71,15 +79,15 @@ type HealthSnapshot struct {
 // back into the runtime: every field is a value, so the same type can later
 // travel across the IPC boundary a future stream adds without redesign.
 type ServiceSnapshot struct {
-	Name           string
-	Config         config.Service
-	State          config.ServiceState
-	DetectedPorts  []int
-	DesiredRunning bool
-	StatusObserved bool
-	CanStart       bool
-	CanStop        bool
-	Health         HealthSnapshot
+	Name           string              `json:"name"`
+	Config         config.Service      `json:"config"`
+	State          config.ServiceState `json:"state"`
+	DetectedPorts  []int               `json:"detected_ports"`
+	DesiredRunning bool                `json:"desired_running"`
+	StatusObserved bool                `json:"status_observed"`
+	CanStart       bool                `json:"can_start"`
+	CanStop        bool                `json:"can_stop"`
+	Health         HealthSnapshot      `json:"health"`
 }
 
 // ServiceStartPlanned reports whether a service is running, starting, or
@@ -93,6 +101,26 @@ func ServiceStartPlanned(svc *ServiceSnapshot) bool {
 		return svc.DesiredRunning
 	}
 	return svc.State.Status != config.StatusStopped || svc.DesiredRunning
+}
+
+// PrimaryServiceAction is the single start/stop decision used by the TUI and
+// structured adapters. An empty result means neither mutation is currently
+// available; callers must execute the returned explicit operation, never a
+// stateful toggle RPC.
+func PrimaryServiceAction(svc *ServiceSnapshot) string {
+	if svc == nil {
+		return ""
+	}
+	if ServiceStartPlanned(svc) {
+		if svc.CanStop {
+			return "stop"
+		}
+		return ""
+	}
+	if svc.CanStart {
+		return "start"
+	}
+	return ""
 }
 
 // BuildInteractiveCommand constructs the *exec.Cmd for an interactive action,
@@ -120,14 +148,15 @@ func BuildInteractiveCommand(action config.Action) *exec.Cmd {
 // ProjectSnapshot describes the currently loaded configuration and the
 // health of its hot-reload pipeline.
 type ProjectSnapshot struct {
-	Name            string
-	Version         string
-	Source          config.SourceFormat
-	ConfigPaths     []string
-	WatchPaths      []string
-	Generation      uint64
-	LoadedAt        time.Time
-	LastReloadError string
+	SessionID       string              `json:"session_id"`
+	Name            string              `json:"name"`
+	Version         string              `json:"version,omitempty"`
+	Source          config.SourceFormat `json:"source"`
+	ConfigPaths     []string            `json:"config_paths"`
+	WatchPaths      []string            `json:"watch_paths"`
+	Generation      uint64              `json:"generation"`
+	LoadedAt        time.Time           `json:"loaded_at"`
+	LastReloadError string              `json:"last_reload_error,omitempty"`
 }
 
 // ShutdownPlan describes what a full shutdown will do to every active

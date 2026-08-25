@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -18,7 +17,6 @@ import (
 	"github.com/kranz-org/kranz/internal/config"
 	"github.com/kranz-org/kranz/internal/port"
 	kranzruntime "github.com/kranz-org/kranz/internal/runtime"
-	"github.com/kranz-org/kranz/internal/service"
 )
 
 // The inspection commands answer questions about a project from its
@@ -426,45 +424,30 @@ func runPlan(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 	if err != nil {
 		return err
 	}
-	selected, err := selectServices(cfg, args)
+	local := app.NewLocal(cfg, nil, app.Options{})
+	defer func() { _ = local.Shutdown() }()
+	plan, err := local.Plan(app.PlanRequest{Operation: "start", Selectors: args, IncludeDependencies: true})
 	if err != nil {
-		return err
+		return classifyLogQueryError(err)
 	}
-	order, err := service.TopologicalOrder(cfg)
-	if err != nil {
-		return &kranzcli.Error{Code: "dependency_cycle", Message: err.Error(), ExitCode: kranzcli.ExitConfig}
-	}
-
-	// A plan has to include the dependencies of what was selected, because
-	// starting the selection starts them too.
-	wanted := make(map[string]bool)
-	for _, name := range selected {
-		addWithDependencies(cfg, name, wanted)
-	}
-	planned := make([]string, 0, len(wanted))
-	for _, name := range order {
-		if wanted[name] {
-			planned = append(planned, name)
-		}
-	}
-	waves := service.DependencyLevels(cfg, planned)
 
 	if options.Output == kranzcli.OutputJSON {
 		type wave struct {
 			Wave     int      `json:"wave"`
 			Services []string `json:"services"`
 		}
-		entries := make([]wave, 0, len(waves))
-		for index, names := range waves {
-			entries = append(entries, wave{index + 1, names})
+		entries := make([]wave, 0, len(plan.Waves))
+		for _, plannedWave := range plan.Waves {
+			entries = append(entries, wave{plannedWave.Wave, plannedWave.Services})
 		}
 		return kranzcli.WriteJSON(stdout, entries)
 	}
-	for index, names := range waves {
+	for _, plannedWave := range plan.Waves {
+		names := plannedWave.Services
 		if len(names) == 0 {
 			continue
 		}
-		_, _ = fmt.Fprintf(stdout, "Wave %d:\n", index+1)
+		_, _ = fmt.Fprintf(stdout, "Wave %d:\n", plannedWave.Wave)
 		for _, name := range names {
 			svc := cfg.Services[name]
 			gate := ""
@@ -475,16 +458,6 @@ func runPlan(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		}
 	}
 	return nil
-}
-
-func addWithDependencies(cfg *config.Config, name string, seen map[string]bool) {
-	if seen[name] {
-		return
-	}
-	seen[name] = true
-	for _, dependency := range cfg.Services[name].DependsOn {
-		addWithDependencies(cfg, dependency, seen)
-	}
 }
 
 func runGraph(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
@@ -746,119 +719,23 @@ func protocolOf(info *config.PortInfo) string {
 // runDoctor runs preflight checks that do not start anything. It reports every
 // finding rather than stopping at the first, because a preflight that hides
 // the second problem behind the first costs another run to discover it.
-type doctorFinding struct {
-	Check   string `json:"check"`
-	Subject string `json:"subject"`
-	Status  string `json:"status"`
-	Detail  string `json:"detail"`
-}
-
-type doctorResult struct {
-	Findings        []doctorFinding `json:"findings"`
-	ServicesChecked int             `json:"services_checked"`
-	Problems        int             `json:"problems"`
-	Warnings        int             `json:"warnings"`
-}
-
 func runDoctor(options kranzcli.GlobalOptions, stdout io.Writer) error {
-	var findings []doctorFinding
-	record := func(check, subject, status, detail string) {
-		findings = append(findings, doctorFinding{check, subject, status, detail})
-	}
-
 	cfg, paths, err := loadProject(options)
 	if err != nil {
 		return err
 	}
-	record("config", strings.Join(paths, ", "), "ok", fmt.Sprintf("%d services, %d actions", len(cfg.Services), len(cfg.ActionIDs())))
-	for _, diagnostic := range cfg.Diagnostics {
-		record("config", "diagnostic", "warn", diagnostic)
-	}
-
-	if _, err := service.TopologicalOrder(cfg); err != nil {
-		record("dependencies", "graph", "fail", err.Error())
-	} else {
-		record("dependencies", "graph", "ok", "no cycles")
-	}
-
-	base := options.Directory
-	var declaredPorts []int
-	for _, name := range cfg.ServiceNames() {
-		svc := cfg.Services[name]
-		declaredPorts = append(declaredPorts, svc.Ports...)
-
-		if svc.Dir != "" {
-			directory := svc.Dir
-			if !filepath.IsAbs(directory) {
-				directory = filepath.Join(base, directory)
-			}
-			if info, statErr := os.Stat(directory); statErr != nil || !info.IsDir() {
-				record("directory", name, "fail", fmt.Sprintf("%s is not a directory", svc.Dir))
-			}
-		}
-		// The loader resolves env files against the service directory and
-		// tolerates a missing one, so an absent file is a warning about
-		// variables that will silently not arrive, not a hard failure.
-		for _, envFile := range config.ServiceEnvFiles(cfg, svc) {
-			path := envFile
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(base, path)
-			}
-			if _, statErr := os.Stat(path); statErr != nil {
-				record("env_file", name, "warn", fmt.Sprintf("%s is missing; its variables will not be set", envFile))
-			}
-		}
-		if svc.Command == "" && svc.Lifecycle.Start.Command == "" {
-			record("command", name, "warn", "no start command")
-			continue
-		}
-		shell := svc.Shell
-		if shell == "" {
-			shell = cfg.Defaults.Shell
-		}
-		if shell != "" {
-			if _, lookErr := exec.LookPath(shell); lookErr != nil {
-				record("shell", name, "fail", fmt.Sprintf("%s is not executable", shell))
-			}
-		}
-	}
-
-	if len(declaredPorts) > 0 {
-		listeners, portErr := port.NewChecker().CheckPorts(declaredPorts)
-		if portErr != nil {
-			record("ports", "check", "warn", portErr.Error())
-		} else {
-			for _, name := range cfg.ServiceNames() {
-				for _, number := range cfg.Services[name].Ports {
-					if info := listeners[number]; info != nil {
-						record("port", fmt.Sprintf("%s:%d", name, number), "warn", fmt.Sprintf("already held by %s (PID %d)", info.Process, info.PID))
-					}
-				}
-			}
-		}
-	}
-
-	failed, warned := 0, 0
-	for _, item := range findings {
-		switch item.Status {
-		case "fail":
-			failed++
-		case "warn":
-			warned++
-		}
-	}
+	// The checks themselves live in the application layer, so `kranz doctor`
+	// and the MCP preflight tool cannot disagree about what is wrong.
+	result := app.Preflight(cfg, paths, options.Directory, port.NewChecker())
 
 	if options.Output == kranzcli.OutputJSON {
-		if err := kranzcli.WriteJSON(stdout, doctorResult{
-			Findings: emptyIfNil(findings), ServicesChecked: len(cfg.Services),
-			Problems: failed, Warnings: warned,
-		}); err != nil {
+		if err := kranzcli.WriteJSON(stdout, result); err != nil {
 			return err
 		}
 	} else {
 		w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 		_, _ = fmt.Fprintln(w, "CHECK\tSUBJECT\tSTATUS\tDETAIL")
-		for _, item := range findings {
+		for _, item := range result.Findings {
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Check, item.Subject, item.Status, orDash(item.Detail))
 		}
 		if err := w.Flush(); err != nil {
@@ -867,21 +744,21 @@ func runDoctor(options kranzcli.GlobalOptions, stdout io.Writer) error {
 		// A clean project produced two rows and never mentioned the services it
 		// examined, so a passing preflight was indistinguishable from one that
 		// had not looked. The summary states the scope either way.
-		_, _ = fmt.Fprintf(stdout, "\nChecked %d service(s): commands, directories, env files, and declared ports.\n", len(cfg.Services))
+		_, _ = fmt.Fprintf(stdout, "\nChecked %d service(s): commands, directories, env files, and declared ports.\n", result.ServicesChecked)
 		switch {
-		case failed > 0:
-			_, _ = fmt.Fprintf(stdout, "%d problem(s) and %d warning(s).\n", failed, warned)
-		case warned > 0:
-			_, _ = fmt.Fprintf(stdout, "No problems. %d warning(s) worth a look.\n", warned)
+		case result.Problems > 0:
+			_, _ = fmt.Fprintf(stdout, "%d problem(s) and %d warning(s).\n", result.Problems, result.Warnings)
+		case result.Warnings > 0:
+			_, _ = fmt.Fprintf(stdout, "No problems. %d warning(s) worth a look.\n", result.Warnings)
 		default:
 			_, _ = fmt.Fprintln(stdout, "No problems found.")
 		}
 	}
-	if failed > 0 {
+	if result.Problems > 0 {
 		if options.Output == kranzcli.OutputJSON {
 			return requestedExitError{code: kranzcli.ExitConfig}
 		}
-		return &kranzcli.Error{Code: "preflight_failed", Message: fmt.Sprintf("%d preflight check(s) failed", failed), ExitCode: kranzcli.ExitConfig}
+		return &kranzcli.Error{Code: "preflight_failed", Message: fmt.Sprintf("%d preflight check(s) failed", result.Problems), ExitCode: kranzcli.ExitConfig}
 	}
 	return nil
 }

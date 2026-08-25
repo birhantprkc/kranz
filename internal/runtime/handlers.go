@@ -39,6 +39,9 @@ var handlers = map[string]handlerFunc{
 	methodConfig: handler(func(_ context.Context, l *app.Local, _ emptyRequest) (*config.Config, error) {
 		return l.Config(), nil
 	}),
+	methodRedactedConfig: handler(func(_ context.Context, l *app.Local, _ emptyRequest) (*config.Config, error) {
+		return l.RedactedConfig()
+	}),
 	methodReload: handler(func(_ context.Context, l *app.Local, req reloadRequest) (app.ReloadResult, error) {
 		return l.Reload(req.Force)
 	}),
@@ -70,6 +73,28 @@ var handlers = map[string]handlerFunc{
 	}),
 	methodShutdownPlan: handler(func(_ context.Context, l *app.Local, _ emptyRequest) (shutdownPlanResponse, error) {
 		return shutdownPlanResponse{Plan: l.ShutdownPlan()}, nil
+	}),
+	methodPlan: handler(func(_ context.Context, l *app.Local, req app.PlanRequest) (app.OperationPlan, error) {
+		return l.Plan(req)
+	}),
+	methodExecutePlan: handler(func(ctx context.Context, l *app.Local, req executePlanRequest) (app.OperationResult, error) {
+		result, err := l.ExecutePlan(ctx, req.Request, req.ConfirmationToken)
+		if err != nil {
+			return result, &app.OperationExecutionError{Result: result, Cause: err}
+		}
+		return result, nil
+	}),
+	methodWait: handler(func(ctx context.Context, l *app.Local, req app.WaitRequest) (app.WaitResult, error) {
+		return l.Wait(ctx, req)
+	}),
+	methodChanges: handler(func(_ context.Context, l *app.Local, req app.ChangeQuery) (app.ChangeResult, error) {
+		return l.Changes(req)
+	}),
+	methodGraph: handler(func(_ context.Context, l *app.Local, _ emptyRequest) (app.Graph, error) {
+		return l.Graph(), nil
+	}),
+	methodPreflight: handler(func(_ context.Context, l *app.Local, _ emptyRequest) (app.PreflightResult, error) {
+		return l.Preflight(), nil
 	}),
 	methodStartServicesContext: handler(func(ctx context.Context, l *app.Local, req namesRequest) (emptyResponse, error) {
 		return emptyResponse{}, l.StartServicesContext(ctx, req.Names)
@@ -112,6 +137,9 @@ var handlers = map[string]handlerFunc{
 		result, ok := l.ActionState(req.ID)
 		return actionStateResponse{Result: result, Ok: ok}, nil
 	}),
+	methodActionResult: handler(func(_ context.Context, l *app.Local, req actionResultRequest) (app.ActionResult, error) {
+		return l.ActionResult(req.ID, req.Run)
+	}),
 	methodCancelAction: handler(func(_ context.Context, l *app.Local, req actionIDRequest) (cancelActionResponse, error) {
 		return cancelActionResponse{Cancelled: l.CancelAction(req.ID)}, nil
 	}),
@@ -128,6 +156,13 @@ var handlers = map[string]handlerFunc{
 	}),
 	methodActionLogs: handler(func(_ context.Context, l *app.Local, req actionIDRequest) (logsResponse, error) {
 		return logsResponse{Entries: l.ActionLogs(req.ID)}, nil
+	}),
+	methodQueryLogs: handler(func(_ context.Context, l *app.Local, req app.LogQuery) (app.LogResult, error) {
+		return l.QueryLogs(req)
+	}),
+	methodClearLogStreams: handler(func(_ context.Context, l *app.Local, req clearLogStreamsRequest) (namesResponse, error) {
+		cleared, err := l.ClearLogStreams(req.Selectors, req.WithActions)
+		return namesResponse{Names: cleared}, err
 	}),
 	methodClearActionLogs: handler(func(_ context.Context, l *app.Local, req actionIDRequest) (emptyResponse, error) {
 		l.ClearActionLogs(req.ID)

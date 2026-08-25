@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"time"
@@ -266,9 +267,9 @@ const (
 // ActionID is a comparable, unambiguous runtime identity. Names remain opaque,
 // so natural keys such as build:launcher do not require delimiter parsing.
 type ActionID struct {
-	OwnerKind ActionOwnerKind
-	Owner     string
-	Name      string
+	OwnerKind ActionOwnerKind `json:"owner_kind"`
+	Owner     string          `json:"owner"`
+	Name      string          `json:"name"`
 }
 
 // ResolveAction returns the normalized action identified by id.
@@ -478,29 +479,71 @@ func (s ServiceStatus) String() string {
 	}
 }
 
+func (s ServiceStatus) MarshalJSON() ([]byte, error) { return json.Marshal(s.String()) }
+
+func (s *ServiceStatus) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	for candidate := StatusStopped; candidate <= StatusUnknown; candidate++ {
+		if candidate.String() == value {
+			*s = candidate
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown service status %q", value)
+}
+
 // ServiceState is a concurrency-safe snapshot of mutable service state.
 type ServiceState struct {
-	Status       ServiceStatus
-	PID          int
-	StartedAt    time.Time
-	ReadyAt      time.Time
-	LastLiveness time.Time
-	FailedChecks int
-	NewLogCount  int
-	Completed    bool
-	ExitCode     int
-	ExitError    string
-	RestartCount int
+	Status ServiceStatus `json:"status"`
+	// Run numbers this service's executions the way an action's run numbers
+	// its invocations. It is the stable address a log query, a transition, and
+	// a failure report all use for the same attempt, so "the logs of the last
+	// failed start" is one identifier rather than a reconstructed time range.
+	Run          uint32    `json:"run,omitempty"`
+	PID          int       `json:"pid,omitempty"`
+	StartedAt    time.Time `json:"started_at,omitempty"`
+	ReadyAt      time.Time `json:"ready_at,omitempty"`
+	LastLiveness time.Time `json:"last_liveness,omitempty"`
+	FailedChecks int       `json:"failed_checks,omitempty"`
+	NewLogCount  int       `json:"new_log_count,omitempty"`
+	Completed    bool      `json:"completed,omitempty"`
+	ExitCode     int       `json:"exit_code"`
+	ExitError    string    `json:"exit_error,omitempty"`
+	RestartCount int       `json:"restart_count,omitempty"`
+	// Cause explains a state whose reason is not visible in the state itself.
+	// A service that is simply stopped has none; a service that stayed stopped
+	// because a prerequisite failed carries the structured fact, so a reader
+	// does not have to recover the causal chain from log text.
+	Cause *StateCause `json:"cause,omitempty"`
+}
+
+// StateCause is the structured reason a service is in its current state.
+type StateCause struct {
+	// Type is one of prerequisite_failed, port_conflict, dependency_failed,
+	// start_failed, or exited.
+	Type       string    `json:"type"`
+	Message    string    `json:"message,omitempty"`
+	At         time.Time `json:"at,omitempty"`
+	Action     string    `json:"action,omitempty"`
+	ActionRun  uint32    `json:"action_run,omitempty"`
+	Dependency string    `json:"dependency,omitempty"`
+	Port       int       `json:"port,omitempty"`
+	PID        int       `json:"pid,omitempty"`
+	Process    string    `json:"process,omitempty"`
+	ExitCode   *int      `json:"exit_code,omitempty"`
 }
 
 // PortInfo identifies the process listening on a configured port.
 type PortInfo struct {
-	Port     int
-	Address  string
-	Protocol string
-	PID      int
-	Process  string
-	Command  string
+	Port     int    `json:"port"`
+	Address  string `json:"address"`
+	Protocol string `json:"protocol"`
+	PID      int    `json:"pid"`
+	Process  string `json:"process,omitempty"`
+	Command  string `json:"command,omitempty"`
 }
 
 // LogLevel is the semantic severity inferred for a log line.

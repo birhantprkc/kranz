@@ -79,7 +79,7 @@ func startRuntime(options kranzcli.GlobalOptions, mode string) (*runtimeHost, *c
 		_ = session.Close()
 		return fail(err)
 	}
-	local := app.NewLocal(cfg, cfgPaths, app.Options{})
+	local := app.NewLocal(cfg, cfgPaths, app.Options{SessionID: metadata.ID})
 	supervisor := kranzruntime.NewSupervisor(local)
 	if err := supervisor.Listen(metadata.Socket); err != nil {
 		_ = session.Close()
@@ -126,9 +126,14 @@ func (h *runtimeHost) Close() error {
 	close(h.stopOwnership)
 	<-h.ownershipDone
 	clientErr := h.client.Close()
+	// Remove the discoverable record and release its lock before attached
+	// clients observe EOF. MCP clients commonly restart a configured server as
+	// soon as its stdio bridge exits; leaving stale-but-locked evidence during
+	// that restart makes the new bridge refuse owner fallback and turns an
+	// orderly down into an initialize-handshake failure.
+	sessionErr := h.session.Close()
 	supervisorErr := h.supervisor.Close()
 	serveErr := <-h.serveErr
-	sessionErr := h.session.Close()
 	return errors.Join(clientErr, supervisorErr, serveErr, sessionErr, h.restoreDir())
 }
 
@@ -744,54 +749,15 @@ func runLifecycle(options kranzcli.GlobalOptions, command string, args []string,
 		}
 		return reportReload(stdout, options, record.Name, result)
 	}
-	names, err := resolveServiceSelectors(client.Config(), args)
+	request := app.PlanRequest{Operation: command, Selectors: args, IncludeDependencies: command == "start"}
+	result, err := executeConfirmedPlan(client, request, options, stdout)
 	if err != nil {
 		return err
 	}
-	// stop and restart expand to dependents, so what the user named is not what
-	// the command touched. The expansion is read before acting, while the
-	// services are still in the state that produced it.
-	affected := names
-	if command == "stop" || command == "restart" {
-		affected = expandToDependents(client, names)
-	}
-	switch command {
-	case "start":
-		err = client.StartServicesContext(context.Background(), names)
-	case "stop":
-		err = client.StopServices(names)
-	case "restart":
-		err = client.RestartServices(names)
-	}
-	if err != nil {
-		return err
-	}
-	names = affected
 	// A command that changes something says what it changed. Silence is
 	// indistinguishable from a no-op, and a selector that expands to dependents
 	// changes more than the user named.
-	return reportLifecycle(stdout, options, command, names)
-}
-
-// expandToDependents returns the services a stop or restart will actually
-// touch, in the runtime's own order, without repeating one twice.
-func expandToDependents(client *kranzruntime.Client, names []string) []string {
-	seen := make(map[string]bool, len(names))
-	expanded := make([]string, 0, len(names))
-	for _, name := range names {
-		for _, affected := range client.AffectedServices(name) {
-			if seen[affected] {
-				continue
-			}
-			seen[affected] = true
-			expanded = append(expanded, affected)
-		}
-		if !seen[name] {
-			seen[name] = true
-			expanded = append(expanded, name)
-		}
-	}
-	return expanded
+	return reportLifecycle(stdout, options, command, result.Plan.Targets)
 }
 
 var lifecyclePastTense = map[string]string{"start": "Started", "stop": "Stopped", "restart": "Restarted"}
@@ -860,36 +826,9 @@ func reportReload(stdout io.Writer, options kranzcli.GlobalOptions, name string,
 // a tag. Name wins deliberately: `kranz stop api` must stop the service called
 // api, not everything that happens to carry api as a tag.
 func resolveServiceSelectors(cfg *config.Config, selectors []string) ([]string, error) {
-	selected := make(map[string]bool)
-	for _, selector := range selectors {
-		if _, ok := cfg.Services[selector]; ok {
-			selected[selector] = true
-			continue
-		}
-		matched := false
-		for name, service := range cfg.Services {
-			for _, tag := range service.Tags {
-				if strings.EqualFold(tag, selector) {
-					selected[name] = true
-					matched = true
-					break
-				}
-			}
-		}
-		if !matched {
-			return nil, &kranzcli.Error{
-				Code:     "selector_not_found",
-				Message:  fmt.Sprintf("service or tag %q was not found", selector),
-				Hint:     "Run `kranz list services` for services and `kranz list tags` for tags.",
-				ExitCode: kranzcli.ExitNotFound,
-			}
-		}
-	}
-	names := make([]string, 0, len(selected))
-	for _, name := range cfg.ServiceOrder {
-		if selected[name] {
-			names = append(names, name)
-		}
+	names, err := app.ResolveServiceSelectors(cfg, selectors)
+	if err != nil {
+		return nil, classifyLogQueryError(err)
 	}
 	return names, nil
 }
@@ -924,6 +863,13 @@ func runDown(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		if err := client.Shutdown(); err != nil {
 			return err
 		}
+		registry, err := kranzruntime.DefaultRegistry()
+		if err != nil {
+			return err
+		}
+		if err := waitForRuntimeShutdown(registry, record, 5*time.Second); err != nil {
+			return err
+		}
 		return reportDown(stdout, options, record.Name, record.ID, false)
 	}
 	if !force {
@@ -939,6 +885,29 @@ func runDown(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		return classifyRuntimeError(err)
 	}
 	return reportDown(stdout, options, record.Name, record.ID, true)
+}
+
+func waitForRuntimeShutdown(registry *kranzruntime.Registry, record kranzruntime.SessionRecord, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		resolveCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		_, err := registry.Resolve(resolveCtx, record.ID, version)
+		cancel()
+		var missing *kranzruntime.SessionNotFoundError
+		if errors.As(err, &missing) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return &kranzcli.Error{
+				Code:     "runtime_shutdown_timeout",
+				Message:  fmt.Sprintf("runtime %q acknowledged shutdown but remained registered", record.Name),
+				Hint:     "Run `kranz ps` to inspect it. Use `kranz down --force` only if the owner no longer responds.",
+				ExitCode: kranzcli.ExitUnavailable,
+				Cause:    err,
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // reportDown names the runtime that stopped. A bare prompt after `down` leaves

@@ -213,13 +213,14 @@ func (m *Model) actionButtons() []actionButton {
 	canToggle := len(targets) > 0
 	for _, name := range targets {
 		svc, ok := m.app.Service(name)
+		primary := app.PrimaryServiceAction(svc)
 		if !ok || !app.ServiceStartPlanned(svc) {
 			allActive = false
 		}
 		if !ok || svc.State.Status == config.StatusStopped {
 			allRunning = false
 		}
-		if !ok || (app.ServiceStartPlanned(svc) && !svc.CanStop) || (!app.ServiceStartPlanned(svc) && !svc.CanStart) {
+		if !ok || primary == "" {
 			canToggle = false
 		}
 	}

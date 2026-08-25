@@ -47,6 +47,38 @@ func TestActionRunnerCapturesSuccessfulResultAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestActionResultRunIdentityAndBoundedHistory(t *testing.T) {
+	id := serviceActionID("app", "inspect")
+	runner := newTestActionRunner(t.TempDir(), map[string]config.Action{"inspect": {Command: "printf ok", Shell: "/bin/sh"}})
+	runner.historySize = 2
+	for want := uint32(1); want <= 3; want++ {
+		result, err := runner.Run(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Run != want {
+			t.Fatalf("run = %d, want %d", result.Run, want)
+		}
+	}
+	latest, err := runner.Result(id, -1)
+	if err != nil || latest.Run != 3 {
+		t.Fatalf("latest = %#v, %v", latest, err)
+	}
+	previous, err := runner.Result(id, -2)
+	if err != nil || previous.Run != 2 {
+		t.Fatalf("previous = %#v, %v", previous, err)
+	}
+	_, err = runner.Result(id, 1)
+	var evicted *ActionRunEvictedError
+	if !errors.As(err, &evicted) || evicted.Run != 1 || evicted.Oldest != 2 {
+		t.Fatalf("evicted = %#v", err)
+	}
+	_, err = runner.Result(id, 4)
+	if !errors.Is(err, ErrActionRunNotFound) {
+		t.Fatalf("unknown run = %#v", err)
+	}
+}
+
 func TestActionRunnerExposesOutputWhileRunning(t *testing.T) {
 	id := serviceActionID("app", "stream")
 	runner := newTestActionRunner(t.TempDir(), map[string]config.Action{
@@ -335,6 +367,14 @@ func TestActionRunnerRetainsNumberedRunsInItsLogStream(t *testing.T) {
 	runner.ClearActionLogs(id)
 	if remaining := runner.ActionLogEntries(id); len(remaining) != 0 {
 		t.Errorf("cleared stream still holds %d entries", len(remaining))
+	}
+	if _, err := runner.Result(id, 1); err == nil {
+		t.Fatal("cleared action result history still resolves run 1")
+	} else {
+		var evicted *ActionRunEvictedError
+		if !errors.As(err, &evicted) {
+			t.Fatalf("cleared run error = %T %v", err, err)
+		}
 	}
 	// Clearing reclaims the buffer without reusing run numbers: an address must
 	// never come to mean a different execution than it did before.

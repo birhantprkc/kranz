@@ -16,6 +16,7 @@ const (
 	methodHello                           = "hello"
 	methodProject                         = "project"
 	methodConfig                          = "config"
+	methodRedactedConfig                  = "redactedConfig"
 	methodReload                          = "reload"
 	methodAcknowledgeExternalWrite        = "acknowledgeExternalWrite"
 	methodServices                        = "services"
@@ -26,6 +27,12 @@ const (
 	methodRequiresStopConfirmation        = "requiresStopConfirmation"
 	methodAffectedServices                = "affectedServices"
 	methodShutdownPlan                    = "shutdownPlan"
+	methodPlan                            = "plan"
+	methodExecutePlan                     = "executePlan"
+	methodWait                            = "wait"
+	methodChanges                         = "changes"
+	methodGraph                           = "graph"
+	methodPreflight                       = "preflight"
 	methodStartServicesContext            = "startServicesContext"
 	methodStopServices                    = "stopServices"
 	methodForceStopServices               = "forceStopServices"
@@ -39,10 +46,13 @@ const (
 	methodShutdown                        = "shutdown"
 	methodRunAction                       = "runAction"
 	methodActionState                     = "actionState"
+	methodActionResult                    = "actionResult"
 	methodCancelAction                    = "cancelAction"
 	methodAcquireInteractiveAction        = "acquireInteractiveAction"
 	methodCompleteInteractiveAction       = "completeInteractiveAction"
 	methodActionLogs                      = "actionLogs"
+	methodQueryLogs                       = "queryLogs"
+	methodClearLogStreams                 = "clearLogStreams"
 	methodClearActionLogs                 = "clearActionLogs"
 	methodLogs                            = "logs"
 	methodClearLogs                       = "clearLogs"
@@ -72,12 +82,27 @@ type namesResponse struct {
 	Names []string `json:"names"`
 }
 
+type clearLogStreamsRequest struct {
+	Selectors   []string `json:"selectors"`
+	WithActions bool     `json:"with_actions"`
+}
+
 type actionIDRequest struct {
 	ID config.ActionID `json:"id"`
 }
 
+type actionResultRequest struct {
+	ID  config.ActionID `json:"id"`
+	Run int             `json:"run"`
+}
+
 type reloadRequest struct {
 	Force bool `json:"force"`
+}
+
+type executePlanRequest struct {
+	Request           app.PlanRequest `json:"request"`
+	ConfirmationToken string          `json:"confirmation_token,omitempty"`
 }
 
 type serviceResponse struct {

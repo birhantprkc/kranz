@@ -1,7 +1,10 @@
 package service
 
 import (
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +22,11 @@ type Service struct {
 	stateMu sync.RWMutex
 
 	stream *logStream
+
+	// journal records this service's transitions for readers that need what
+	// happened rather than what is. It is nil for services constructed outside
+	// a Manager, and Journal.Record tolerates that.
+	journal *Journal
 
 	// HealthHistory is bounded separately from process output.
 	HealthHistory *ringbuffer.RingBuffer
@@ -79,6 +87,31 @@ func (s *Service) DetectedPorts() []int {
 	return append([]int(nil), s.detectedPorts...)
 }
 
+func (s *Service) updateDetectedPortsJournalled(generation uint64, ports []int) bool {
+	previous := s.DetectedPorts()
+	if !s.updateDetectedPorts(generation, ports) {
+		return false
+	}
+	current := s.DetectedPorts()
+	if slices.Equal(previous, current) {
+		return true
+	}
+	s.journal.Record(Transition{Kind: TransitionServicePorts, Service: s.Name, Run: s.Run(), Ports: current,
+		From: formatPorts(previous), To: formatPorts(current), Summary: s.Name + " ports " + formatPorts(previous) + " -> " + formatPorts(current)})
+	return true
+}
+
+func formatPorts(ports []int) string {
+	if len(ports) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(ports))
+	for _, port := range ports {
+		parts = append(parts, strconv.Itoa(port))
+	}
+	return strings.Join(parts, ",")
+}
+
 func (s *Service) updateDetectedPorts(generation uint64, ports []int) bool {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
@@ -123,23 +156,70 @@ func NewService(name string, cfg config.Service, logBufSize int) *Service {
 	}
 }
 
-// SetStatus atomically updates lifecycle status and transition timestamps.
+// SetJournal attaches the runtime journal this service records into.
+func (s *Service) SetJournal(journal *Journal) { s.journal = journal }
+
+// SetStatus atomically updates lifecycle status and transition timestamps, and
+// records the transition. Every lifecycle path funnels through here, so the
+// journal cannot miss a change some other path made.
 func (s *Service) SetStatus(status config.ServiceStatus) {
 	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
+	previous := s.State.Status
 	s.State.Status = status
 	if status == config.StatusStarting || status == config.StatusStopping {
 		s.lifecycleGeneration++
 	}
 	if status == config.StatusStarting {
+		// A start opens a new numbered run, and the log stream numbers the
+		// lines it captures with it. That is what makes "the logs of run 3" an
+		// address rather than a time range a reader has to reconstruct.
+		s.State.Run = s.stream.BeginRun()
 		s.State.StartedAt = time.Now()
 		s.State.Completed = false
 		s.State.ExitCode = 0
 		s.State.ExitError = ""
+		s.State.Cause = nil
 	}
 	if status == config.StatusRunning && s.State.StartedAt.IsZero() {
 		s.State.StartedAt = time.Now()
 	}
+	transition := Transition{
+		Kind:    TransitionServiceState,
+		Service: s.Name,
+		From:    previous.String(),
+		To:      status.String(),
+		Run:     s.State.Run,
+		PID:     s.State.PID,
+		Cause:   s.State.Cause,
+		Summary: s.Name + " " + status.String(),
+	}
+	if status == config.StatusStopped && s.State.Completed {
+		exit := s.State.ExitCode
+		transition.ExitCode = &exit
+	}
+	s.stateMu.Unlock()
+	if previous != status {
+		s.journal.Record(transition)
+	}
+}
+
+// SetCause records the structured reason for the current state. Callers set it
+// before the status change it explains, so the transition carries the cause
+// with it instead of a reader having to correlate two records by time.
+func (s *Service) SetCause(cause *config.StateCause) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if cause != nil && cause.At.IsZero() {
+		cause.At = time.Now()
+	}
+	s.State.Cause = cause
+}
+
+// Run returns the current execution number of this service.
+func (s *Service) Run() uint32 {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.State.Run
 }
 
 // LifecycleGeneration identifies results started before the latest transition.
@@ -179,7 +259,9 @@ func (s *Service) LifecycleStatusObserved() bool { return s.statusObserved.Load(
 
 func (s *Service) markLifecycleStatusObserved() { s.statusObserved.Store(true) }
 
-// RecordExit stores the most recent process completion result.
+// RecordExit stores the most recent process completion result. An unsuccessful
+// exit is also the cause of the stop that follows it, so the reason survives
+// past the moment the status becomes stopped.
 func (s *Service) RecordExit(code int, err error) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
@@ -189,6 +271,14 @@ func (s *Service) RecordExit(code int, err error) {
 		s.State.ExitError = err.Error()
 	} else {
 		s.State.ExitError = ""
+	}
+	if code != 0 || err != nil {
+		exit := code
+		cause := &config.StateCause{Type: "exited", ExitCode: &exit, At: time.Now(), PID: s.State.PID}
+		if err != nil {
+			cause.Message = err.Error()
+		}
+		s.State.Cause = cause
 	}
 }
 

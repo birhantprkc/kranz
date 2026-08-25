@@ -39,6 +39,19 @@ type Manager struct {
 	prereqMu             sync.Mutex
 	prereqSatisfied      map[config.ActionID]bool
 	prereqRuns           map[config.ActionID]*prereqRun
+	journal              *Journal
+}
+
+// Journal returns the runtime transition journal shared by every service and
+// action this manager owns.
+func (m *Manager) Journal() *Journal { return m.journal }
+
+// newService constructs a service already attached to this manager's journal,
+// so no construction path can produce a service whose changes go unrecorded.
+func (m *Manager) newService(name string, cfg config.Service) *Service {
+	svc := NewService(name, cfg, 1000)
+	svc.SetJournal(m.journal)
+	return svc
 }
 
 type statusMonitor struct {
@@ -109,7 +122,7 @@ func (m *Manager) ApplyConfig(next *config.Config) (ReloadResult, error) {
 		// Detached resources are external to Kranz. Reload their definition
 		// without cycling the external resource, while retaining observed state.
 		if svc.Config.IsDetached() && incoming.IsDetached() {
-			replacement := NewService(name, incoming, 1000)
+			replacement := m.newService(name, incoming)
 			replacement.CopyLogHistoryFrom(svc)
 			replacement.HealthHistory = svc.HealthHistory
 			replacement.RestoreState(svc.GetState(), svc.DesiredRunning())
@@ -126,7 +139,7 @@ func (m *Manager) ApplyConfig(next *config.Config) (ReloadResult, error) {
 			}
 			runningChanged = append(runningChanged, name)
 		}
-		replacement := NewService(name, incoming, 1000)
+		replacement := m.newService(name, incoming)
 		// Keep the visible history across a hot reload without mutating the
 		// configuration object observed by process-monitor goroutines.
 		replacement.CopyLogHistoryFrom(svc)
@@ -143,7 +156,7 @@ func (m *Manager) ApplyConfig(next *config.Config) (ReloadResult, error) {
 	}
 	for name, svcConfig := range next.Services {
 		if _, exists := m.services[name]; !exists {
-			m.services[name] = NewService(name, svcConfig, 1000)
+			m.services[name] = m.newService(name, svcConfig)
 			result.Added = append(result.Added, name)
 		}
 	}
@@ -186,10 +199,12 @@ func NewManager(cfg *config.Config) *Manager {
 		detachedLogs:         make(map[string]*detachedLogFollower),
 		prereqSatisfied:      make(map[config.ActionID]bool),
 		prereqRuns:           make(map[config.ActionID]*prereqRun),
+		journal:              NewJournal(defaultJournalSize),
 	}
+	m.actions.SetJournal(m.journal)
 
 	for name, svcCfg := range cfg.Services {
-		m.services[name] = NewService(name, svcCfg, 1000)
+		m.services[name] = m.newService(name, svcCfg)
 	}
 	for name, svcCfg := range cfg.Services {
 		if svcCfg.Lifecycle.Status != nil {

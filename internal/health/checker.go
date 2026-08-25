@@ -26,6 +26,17 @@ func (hc *Checker) SetDetectedPortsProvider(provider func(string) []int) {
 	hc.detectedPortsProvider = provider
 }
 
+// ProbeState is the last observed outcome of one probe kind. It exists so a
+// reader can answer "why is readiness failing" with the endpoint that was
+// probed and the error it returned, instead of grepping the history strings.
+type ProbeState struct {
+	Configured          bool      `json:"configured"`
+	Target              string    `json:"target,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
+	LastAttempt         time.Time `json:"last_attempt,omitempty"`
+	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
+}
+
 // ServiceHealth stores the synchronized probe state for one service.
 type ServiceHealth struct {
 	mu         sync.RWMutex
@@ -34,6 +45,52 @@ type ServiceHealth struct {
 	History    *ringbuffer.RingBuffer
 	ReadySince time.Time
 	LastCheck  time.Time
+	readiness  ProbeState
+	liveness   ProbeState
+}
+
+// Probes returns copies of the readiness and liveness probe states.
+func (sh *ServiceHealth) Probes() (readiness, liveness ProbeState) {
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	return sh.readiness, sh.liveness
+}
+
+// recordProbe stores one probe attempt while the caller holds mu.
+func (state *ProbeState) recordProbe(target string, at time.Time, err error) {
+	state.Configured = true
+	state.LastAttempt = at
+	if target != "" {
+		state.Target = target
+	}
+	if err == nil {
+		state.LastError = ""
+		state.ConsecutiveFailures = 0
+		return
+	}
+	state.LastError = err.Error()
+	state.ConsecutiveFailures++
+}
+
+// describeTarget names what a probe actually contacts, after any detected-port
+// resolution, so the reported target is the one that was tried.
+func describeTarget(cfg *config.CheckConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	switch cfg.Type {
+	case config.CheckHTTP:
+		return cfg.URL
+	case config.CheckTCP:
+		if cfg.Port == 0 {
+			return "tcp"
+		}
+		return fmt.Sprintf("tcp://127.0.0.1:%d", cfg.Port)
+	case config.CheckCommand:
+		return cfg.Command
+	default:
+		return string(cfg.Type)
+	}
 }
 
 // IsReady returns the latest readiness result.
@@ -120,6 +177,10 @@ func (hc *Checker) StartMonitoring(name string, checkCfg *config.HealthCheckConf
 		health.mu.Lock()
 		health.setReady(true)
 		health.mu.Unlock()
+	} else {
+		health.mu.Lock()
+		health.readiness = ProbeState{Configured: true, Target: describeTarget(checkCfg.Readiness)}
+		health.mu.Unlock()
 	}
 	if checkCfg.Liveness == nil {
 		health.mu.Lock()
@@ -130,6 +191,7 @@ func (hc *Checker) StartMonitoring(name string, checkCfg *config.HealthCheckConf
 		// threshold is reached. LastCheck remains zero until the first probe.
 		health.mu.Lock()
 		health.Alive = true
+		health.liveness = ProbeState{Configured: true, Target: describeTarget(checkCfg.Liveness)}
 		health.mu.Unlock()
 	}
 
@@ -153,16 +215,18 @@ func (hc *Checker) runReadinessCheck(name string, cfg *config.CheckConfig, healt
 	defer ticker.Stop()
 
 	for {
-		err := hc.executeCheck(name, cfg)
+		target, err := hc.executeCheck(name, cfg)
 		now := time.Now()
 		if err == nil {
 			health.mu.Lock()
 			health.setReady(true)
+			health.readiness.recordProbe(target, now, nil)
 			health.History.Write(formatEvent(now, "Readiness passed ✓"))
 			health.mu.Unlock()
 			return
 		}
 		health.mu.Lock()
+		health.readiness.recordProbe(target, now, err)
 		health.History.Write(formatEvent(now, "Readiness failed: "+err.Error()))
 		health.mu.Unlock()
 
@@ -185,10 +249,11 @@ func (hc *Checker) runLivenessCheck(name string, cfg *config.CheckConfig, health
 	failCount := 0
 
 	for {
-		err := hc.executeCheck(name, cfg)
+		target, err := hc.executeCheck(name, cfg)
 		now := time.Now()
 		health.mu.Lock()
 		health.LastCheck = now
+		health.liveness.recordProbe(target, now, err)
 		if err == nil {
 			failCount = 0
 			health.Alive = true

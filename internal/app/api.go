@@ -19,6 +19,9 @@ type API interface {
 	// Config returns the effective configuration. Callers must treat it as
 	// read-only: it is the same value the runtime is using.
 	Config() *config.Config
+	// RedactedConfig returns a detached effective config safe for delivery to
+	// structured clients.
+	RedactedConfig() (*config.Config, error)
 	// Reload re-reads the configuration from disk if any watched path
 	// changed since the last successful load (or unconditionally, if
 	// force is true), and reconciles it into the running services.
@@ -52,6 +55,23 @@ type API interface {
 	AffectedServices(name string) []string
 	// ShutdownPlan describes what a full shutdown will do right now.
 	ShutdownPlan() ShutdownPlan
+	// Plan and ExecutePlan expose versioned resolved lifecycle/action plans and
+	// supervisor-owned one-shot confirmations.
+	Plan(request PlanRequest) (OperationPlan, error)
+	ExecutePlan(ctx context.Context, request PlanRequest, confirmationToken string) (OperationResult, error)
+	// Wait blocks inside the application layer until all selected services
+	// satisfy one supported condition or ctx ends.
+	Wait(ctx context.Context, request WaitRequest) (WaitResult, error)
+	// Changes returns the recorded runtime transitions after a cursor. It
+	// answers what happened, which the difference between two status snapshots
+	// cannot: a service that restarted and came back looks unchanged in a diff.
+	Changes(query ChangeQuery) (ChangeResult, error)
+	// Graph returns the declared dependency and prerequisite structure of the
+	// project with live service state folded in.
+	Graph() Graph
+	// Preflight checks the loaded configuration against the filesystem and the
+	// ports it declares, without touching running services.
+	Preflight() PreflightResult
 
 	// StartServicesContext starts names and their dependencies, honoring
 	// ctx cancellation while it waits on dependency readiness gates.
@@ -89,6 +109,9 @@ type API interface {
 	// ActionState returns the last known result for id, if any action
 	// with that identity has ever run or is configured.
 	ActionState(id config.ActionID) (ActionResult, bool)
+	// ActionResult returns a current or retained action execution. Positive
+	// run values are absolute and negative values are offsets from newest.
+	ActionResult(id config.ActionID, run int) (ActionResult, error)
 	// CancelAction cancels a running action, reporting whether one was
 	// running to cancel.
 	CancelAction(id config.ActionID) bool
@@ -112,6 +135,12 @@ type API interface {
 	// ActionLogs returns the buffered log entries of one action. Lifecycle
 	// actions have none: their output belongs to the service they act on.
 	ActionLogs(id config.ActionID) []config.LogEntry
+	// QueryLogs resolves selectors and applies run/source/since/tail/cursor
+	// semantics in the application layer shared by every delivery adapter.
+	QueryLogs(query LogQuery) (LogResult, error)
+	// ClearLogStreams resolves the same service/tag/action targets as QueryLogs
+	// and clears only those bounded buffers.
+	ClearLogStreams(selectors []string, withActions bool) ([]string, error)
 	// ClearActionLogs discards one action's buffered logs.
 	ClearActionLogs(id config.ActionID)
 	// ClearLogs discards a service's buffered logs and resets its unread

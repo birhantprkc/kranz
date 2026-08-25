@@ -29,6 +29,7 @@ const (
 	SessionRunning      SessionState = "running"
 	SessionIncompatible SessionState = "incompatible"
 	SessionUnreachable  SessionState = "unreachable"
+	SessionStale        SessionState = "stale"
 )
 
 type SessionMetadata struct {
@@ -336,6 +337,10 @@ func atomicJSON(path string, value any) error {
 }
 
 func (r *Registry) List(ctx context.Context, clientVersion string) ([]SessionRecord, error) {
+	return r.list(ctx, clientVersion, false)
+}
+
+func (r *Registry) list(ctx context.Context, clientVersion string, includeStale bool) ([]SessionRecord, error) {
 	paths, err := filepath.Glob(filepath.Join(r.root, "*.json"))
 	if err != nil {
 		return nil, err
@@ -378,6 +383,10 @@ func (r *Registry) List(ctx context.Context, clientVersion string) ([]SessionRec
 			_ = os.Remove(metadata.Socket)
 			_ = os.Remove(path)
 			_ = os.Remove(r.ownershipPath(metadata.Name))
+			if includeStale {
+				record.State = SessionStale
+				records = append(records, record)
+			}
 			continue
 		}
 		records = append(records, record)
@@ -392,6 +401,22 @@ func (r *Registry) Resolve(ctx context.Context, reference, clientVersion string)
 	if err != nil {
 		return SessionRecord{}, err
 	}
+	return resolveRecord(records, reference)
+}
+
+// ResolveForAttach preserves one observation of a stale metadata record while
+// cleaning it from disk. Attach-first adapters can therefore refuse owner
+// fallback for that launch instead of silently converting stale evidence into
+// "not found" and racing an unproven supervisor.
+func (r *Registry) ResolveForAttach(ctx context.Context, reference, clientVersion string) (SessionRecord, error) {
+	records, err := r.list(ctx, clientVersion, true)
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	return resolveRecord(records, reference)
+}
+
+func resolveRecord(records []SessionRecord, reference string) (SessionRecord, error) {
 	for _, record := range records {
 		if record.Name == reference || record.ID == reference {
 			return record, nil

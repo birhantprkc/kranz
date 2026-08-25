@@ -163,7 +163,8 @@ func (m *Model) renderServiceListRow(index int, row actionListRow, width int) st
 		return renderListLine(line, width, focused)
 	case actionRowAction:
 		state, _ := m.app.ActionState(row.Action)
-		status := actionStatusIndicator(state.Status) + " " + row.Action.Name
+		name := actionRunName(row.Action.Name, state.Run)
+		status := actionStatusIndicator(state.Status) + " " + name
 		if state.Status != app.ActionReady {
 			status += ContextBarStyle.Render("  " + state.Status.String())
 		}
@@ -174,6 +175,13 @@ func (m *Model) renderServiceListRow(index int, row actionListRow, width int) st
 	default:
 		return ""
 	}
+}
+
+func actionRunName(name string, run uint32) string {
+	if run > 0 {
+		return fmt.Sprintf("%s#%d", name, run)
+	}
+	return name
 }
 
 func (m *Model) renderServiceOwnerLine(svc *app.ServiceSnapshot, width int, focused bool) string {

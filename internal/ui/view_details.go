@@ -60,7 +60,8 @@ func (m *Model) renderActionDetails(width, height int) string {
 }
 
 func (m *Model) actionDetailLines(id config.ActionID, action config.Action, state app.ActionResult, contentWidth int) []string {
-	lines := []string{actionStatusIndicator(state.Status) + " " + ServiceNameStyle.Render(id.Name) + "  " + ContextBarStyle.Render(state.Status.String())}
+	name := actionRunName(id.Name, state.Run)
+	lines := []string{actionStatusIndicator(state.Status) + " " + ServiceNameStyle.Render(name) + "  " + ContextBarStyle.Render(state.Status.String())}
 	owner := "service " + id.Owner
 	if id.OwnerKind == config.ActionOwnerGroup {
 		owner = "group " + id.Owner

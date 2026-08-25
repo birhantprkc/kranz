@@ -9,6 +9,7 @@ import (
 
 	"github.com/kranz-org/kranz/internal/app"
 	"github.com/kranz-org/kranz/internal/config"
+	"github.com/kranz-org/kranz/internal/service"
 )
 
 // startTestSupervisor wires a Local for cfg behind a Supervisor listening on
@@ -115,6 +116,62 @@ func TestSupervisorClientDriveARealServiceLifecycle(t *testing.T) {
 	}
 }
 
+func TestSupervisorCloseDisconnectsAllAttachedClients(t *testing.T) {
+	cfg := &config.Config{Project: "Close attached clients"}
+	local := app.NewLocal(cfg, nil, app.Options{})
+	defer func() { _ = local.Shutdown() }()
+	supervisor := NewSupervisor(local)
+	_, socketPath, cleanupDir, err := NewSocketDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupDir()
+	if err := supervisor.Listen(socketPath); err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- supervisor.Serve() }()
+
+	first, err := Dial(socketPath, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	second, err := Dial(socketPath, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- supervisor.Close() }()
+	for index, client := range []*Client{first, second} {
+		select {
+		case <-client.Done():
+		case <-time.After(2 * time.Second):
+			_ = first.Close()
+			_ = second.Close()
+			t.Fatalf("client %d remained connected after supervisor close", index+1)
+		}
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Supervisor.Close blocked on attached clients")
+	}
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve remained blocked after Close")
+	}
+}
+
 func TestStartedServiceOutlivesCompletedRPCRequest(t *testing.T) {
 	cfg := &config.Config{Project: "RPC lifetime", Services: map[string]config.Service{
 		"worker": {Command: "sleep 60"},
@@ -159,6 +216,64 @@ func TestSupervisorClientRunNonInteractiveAction(t *testing.T) {
 	state, ok := client.ActionState(id)
 	if !ok || state.Status != app.ActionSucceeded {
 		t.Fatalf("action state = %#v, ok=%v", state, ok)
+	}
+}
+
+func TestExecutePlanPreservesFailedActionRunAcrossIPC(t *testing.T) {
+	cfg := &config.Config{Project: "RPC Failed Action", ActionGroups: map[string]config.ActionGroup{
+		"ops": {Actions: map[string]config.Action{"fail": {Command: "exit 7", Shell: "/bin/sh"}}},
+	}}
+	client, cleanup := startTestSupervisor(t, cfg, nil)
+	defer cleanup()
+	id := config.ActionID{OwnerKind: config.ActionOwnerGroup, Owner: "ops", Name: "fail"}
+	result, err := client.ExecutePlan(context.Background(), app.PlanRequest{Operation: "action", Action: id}, "")
+	var exit *app.ActionExitError
+	if !errors.As(err, &exit) || exit.ExitCode != 7 {
+		t.Fatalf("error = %T %v", err, err)
+	}
+	if result.ActionResult == nil || result.ActionResult.Run != 1 || result.ActionResult.Status != app.ActionFailed || result.ActionResult.ExitCode != 7 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestExecutePlanRequestCancellationDoesNotCancelAction(t *testing.T) {
+	cfg := &config.Config{Project: "RPC Durable Action", ActionGroups: map[string]config.ActionGroup{
+		"ops": {Actions: map[string]config.Action{"slow": {Command: "sleep 0.1; echo done", Shell: "/bin/sh"}}},
+	}}
+	client, cleanup := startTestSupervisor(t, cfg, nil)
+	defer cleanup()
+	id := config.ActionID{OwnerKind: config.ActionOwnerGroup, Owner: "ops", Name: "slow"}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct {
+		result app.OperationResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := client.ExecutePlan(ctx, app.PlanRequest{Operation: "action", Action: id}, "")
+		done <- struct {
+			result app.OperationResult
+			err    error
+		}{result, err}
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	completed := <-done
+	if completed.err != nil || completed.result.ActionResult == nil || completed.result.ActionResult.Status != app.ActionSucceeded {
+		t.Fatalf("durable execution = %#v, %v", completed.result, completed.err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		result, err := client.ActionResult(id, -1)
+		if err == nil && result.Status == app.ActionSucceeded {
+			break
+		}
+		if err == nil && result.Status == app.ActionCancelled {
+			t.Fatal("request cancellation cancelled action")
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("durable result = %#v, %v", result, err)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -296,6 +411,88 @@ func TestSupervisorClientContextCancellationInterruptsAWaitingStart(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancellation did not interrupt the readiness wait over the wire")
 	}
+	dependency, ok := client.Service("dependency")
+	if !ok || dependency.State.Status == config.StatusStopped {
+		t.Fatalf("request cancellation stopped an already started service: %#v", dependency)
+	}
 
 	_ = client.StopAll()
+}
+
+func TestChangesGraphAndPreflightCrossTheIPCBoundary(t *testing.T) {
+	cfg, err := config.LoadFiles([]string{"../../examples/native/kranz.yaml"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	client, cleanup := startTestSupervisor(t, cfg, []string{"../../examples/native/kranz.yaml"})
+	defer cleanup()
+
+	before, err := client.Changes(app.ChangeQuery{})
+	if err != nil {
+		t.Fatalf("changes: %v", err)
+	}
+	name := cfg.ServiceNames()[0]
+	if err := client.ForceStartServices([]string{name}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// An attached MCP session reads the same journal the owner records into;
+	// a transition that only existed in-process would make the two disagree.
+	after, err := client.Changes(app.ChangeQuery{Since: before.Cursor, Selectors: []string{name}})
+	if err != nil {
+		t.Fatalf("changes since: %v", err)
+	}
+	if len(after.Changes) == 0 || after.Changes[0].Service != name {
+		t.Fatalf("changes = %#v", after.Changes)
+	}
+	if after.Changes[0].Run == 0 {
+		t.Fatalf("run identity lost across IPC: %#v", after.Changes[0])
+	}
+
+	if graph := client.Graph(); len(graph.Nodes) == 0 {
+		t.Fatal("graph did not cross the boundary")
+	}
+	if preflight := client.Preflight(); preflight.ServicesChecked != len(cfg.Services) {
+		t.Fatalf("preflight = %#v", preflight)
+	}
+	if err := client.StopServices([]string{name}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+func TestPrerequisiteFailureAndWaitTimeoutKeepTheirIdentityAcrossIPC(t *testing.T) {
+	cfg := &config.Config{Project: "Prerequisites", ServiceOrder: []string{"api"}, Services: map[string]config.Service{
+		"api": {
+			Command: "sleep 30", Shell: "/bin/sh",
+			BeforeStart: []config.Prerequisite{{Action: "preflight", Run: config.PrerequisiteAlways}},
+			Actions:     map[string]config.Action{"preflight": {Command: "exit 3", Shell: "/bin/sh"}},
+			ActionOrder: []string{"preflight"},
+		},
+	}}
+	client, cleanup := startTestSupervisor(t, cfg, nil)
+	defer cleanup()
+
+	_, err := client.ExecutePlan(context.Background(), app.PlanRequest{Operation: "start", Selectors: []string{"api"}, IncludeDependencies: true}, "")
+	// Flattening this to text is what made an attached client report a
+	// specific, answerable failure as a generic one.
+	var prerequisite *service.PrerequisiteError
+	if !errors.As(err, &prerequisite) {
+		t.Fatalf("start err = %#v", err)
+	}
+	if prerequisite.Service != "api" || prerequisite.Action.Name != "preflight" || prerequisite.Run != 1 {
+		t.Fatalf("prerequisite = %#v", prerequisite)
+	}
+	if !errors.Is(err, service.ErrPrerequisiteFailed) {
+		t.Fatal("errors.Is lost the prerequisite kind")
+	}
+	if strings.Count(prerequisite.Error(), "not started") != 1 {
+		t.Fatalf("message repeats itself: %q", prerequisite.Error())
+	}
+
+	// The runtime owns the wait timeout. When the transport deadline owned it,
+	// the client gave up first and a timeout was reported as a cancellation.
+	_, err = client.Wait(context.Background(), app.WaitRequest{Selectors: []string{"api"}, Condition: "ready", Timeout: 200 * time.Millisecond})
+	var waitErr *app.WaitError
+	if !errors.As(err, &waitErr) || waitErr.Code != "wait_timeout" {
+		t.Fatalf("wait err = %#v", err)
+	}
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -20,9 +21,23 @@ const (
 
 var (
 	ErrActionNotFound       = errors.New("action not found")
+	ErrActionRunNotFound    = errors.New("action run not found")
 	ErrActionRunnerStopping = errors.New("action runner is shutting down")
 	ErrInteractiveAction    = errors.New("interactive action requires terminal handoff")
 )
+
+// ActionRunEvictedError means the requested run once existed but has fallen
+// out of the bounded result history. This is deliberately distinct from an
+// unknown action or a run number that has never existed.
+type ActionRunEvictedError struct {
+	ID     config.ActionID
+	Run    uint32
+	Oldest uint32
+}
+
+func (e *ActionRunEvictedError) Error() string {
+	return fmt.Sprintf("action %s/%s run %d was evicted; oldest retained run is %d", e.ID.Owner, e.ID.Name, e.Run, e.Oldest)
+}
 
 // ActionStatus describes the lifecycle of a finishing command.
 type ActionStatus uint8
@@ -56,18 +71,35 @@ func (s ActionStatus) String() string {
 	}
 }
 
+func (s ActionStatus) MarshalJSON() ([]byte, error) { return json.Marshal(s.String()) }
+
+func (s *ActionStatus) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	for candidate := ActionReady; candidate <= ActionCancelled; candidate++ {
+		if candidate.String() == value {
+			*s = candidate
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown action status %q", value)
+}
+
 // ActionResult is the concurrency-safe snapshot retained for one action.
 type ActionResult struct {
-	ID         config.ActionID
-	Status     ActionStatus
-	PID        int
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Duration   time.Duration
-	ExitCode   int
-	Error      string
-	Stdout     []string
-	Stderr     []string
+	ID         config.ActionID `json:"id"`
+	Run        uint32          `json:"run"`
+	Status     ActionStatus    `json:"status"`
+	PID        int             `json:"pid,omitempty"`
+	StartedAt  time.Time       `json:"started_at,omitempty"`
+	FinishedAt time.Time       `json:"finished_at,omitempty"`
+	Duration   time.Duration   `json:"duration,omitempty"`
+	ExitCode   int             `json:"exit_code"`
+	Error      string          `json:"error,omitempty"`
+	Stdout     []string        `json:"stdout,omitempty"`
+	Stderr     []string        `json:"stderr,omitempty"`
 }
 
 // ActionBusyError identifies the action currently occupying an owner.
@@ -117,12 +149,34 @@ type ActionRunner struct {
 	mu           sync.RWMutex
 	cfg          *config.Config
 	states       map[config.ActionID]ActionResult
+	history      map[config.ActionID][]ActionResult
+	nextRun      map[config.ActionID]uint32
+	historySize  int
 	active       map[actionOwner]*activeAction
 	logBufSize   int
 	logsMu       sync.RWMutex
 	logs         map[config.ActionID]*logStream
 	shuttingDown bool
 	leaseSeq     atomic.Uint64
+	journal      *Journal
+}
+
+// SetJournal attaches the runtime transition journal action runs record into.
+func (r *ActionRunner) SetJournal(journal *Journal) { r.journal = journal }
+
+// recordActionTransition writes one action lifecycle fact. A service-owned
+// action also names its owner, so "what happened to api" can be answered
+// without the reader knowing which actions api owns.
+func (r *ActionRunner) recordActionTransition(id config.ActionID, run uint32, from, to ActionStatus, exitCode int, summary string) {
+	transition := Transition{Kind: TransitionActionState, Action: id.Owner + "/" + id.Name, From: from.String(), To: to.String(), Run: run, Summary: summary}
+	if id.OwnerKind == config.ActionOwnerService {
+		transition.Service = id.Owner
+	}
+	if to != ActionRunning {
+		exit := exitCode
+		transition.ExitCode = &exit
+	}
+	r.journal.Record(transition)
 }
 
 // NewActionRunner creates an action runner for one loaded project config.
@@ -131,11 +185,14 @@ func NewActionRunner(cfg *config.Config, logBufSize int) *ActionRunner {
 		logBufSize = defaultActionLogBuffer
 	}
 	return &ActionRunner{
-		cfg:        cfg,
-		states:     make(map[config.ActionID]ActionResult),
-		active:     make(map[actionOwner]*activeAction),
-		logs:       make(map[config.ActionID]*logStream),
-		logBufSize: logBufSize,
+		cfg:         cfg,
+		states:      make(map[config.ActionID]ActionResult),
+		history:     make(map[config.ActionID][]ActionResult),
+		nextRun:     make(map[config.ActionID]uint32),
+		active:      make(map[actionOwner]*activeAction),
+		logs:        make(map[config.ActionID]*logStream),
+		logBufSize:  logBufSize,
+		historySize: logBufSize,
 	}
 }
 
@@ -153,6 +210,7 @@ func (r *ActionRunner) ApplyConfig(next *config.Config) {
 		nextAction, nextExists := next.ResolveAction(id)
 		if !currentExists || !nextExists || !reflect.DeepEqual(currentAction, nextAction) {
 			delete(r.states, id)
+			delete(r.history, id)
 		}
 	}
 	r.cfg = next
@@ -202,16 +260,18 @@ func (r *ActionRunner) RunDefinition(ctx context.Context, id config.ActionID, ac
 	active := &activeAction{id: id, cancel: cancel, done: make(chan struct{})}
 	r.active[owner] = active
 	started := time.Now()
-	r.states[id] = ActionResult{ID: id, Status: ActionRunning, ExitCode: -1, StartedAt: started}
+	run := r.nextRun[id] + 1
+	r.nextRun[id] = run
+	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started}
 	r.mu.Unlock()
 
 	stream := r.logStreamFor(id)
-	var run uint32
 	if stream != nil {
-		run = stream.BeginRun()
+		stream.BeginRunNumber(run)
 		stream.Append(started, "kranz", fmt.Sprintf("[Kranz] %s/%s #%d started", id.Owner, id.Name, run))
 	}
-	result, runErr := r.execute(runCtx, id, action, started, stream)
+	r.recordActionTransition(id, run, ActionReady, ActionRunning, 0, fmt.Sprintf("%s/%s #%d started", id.Owner, id.Name, run))
+	result, runErr := r.execute(runCtx, id, action, run, started, stream)
 	if stream != nil {
 		stream.Append(time.Now(), "kranz", fmt.Sprintf("[Kranz] %s/%s #%d %s · exit %d · %s",
 			id.Owner, id.Name, run, result.Status, result.ExitCode, result.Duration.Round(time.Millisecond)))
@@ -220,13 +280,16 @@ func (r *ActionRunner) RunDefinition(ctx context.Context, id config.ActionID, ac
 	r.mu.Lock()
 	delete(r.active, owner)
 	r.states[id] = cloneActionResult(result)
+	r.retainResultLocked(result)
 	close(active.done)
 	r.mu.Unlock()
+	r.recordActionTransition(id, run, ActionRunning, result.Status, result.ExitCode,
+		fmt.Sprintf("%s/%s #%d %s · exit %d", id.Owner, id.Name, run, result.Status, result.ExitCode))
 	return result, runErr
 }
 
-func (r *ActionRunner) execute(ctx context.Context, id config.ActionID, action config.Action, started time.Time, stream *logStream) (ActionResult, error) {
-	result := ActionResult{ID: id, Status: ActionFailed, ExitCode: -1, StartedAt: started}
+func (r *ActionRunner) execute(ctx context.Context, id config.ActionID, action config.Action, run uint32, started time.Time, stream *logStream) (ActionResult, error) {
+	result := ActionResult{ID: id, Run: run, Status: ActionFailed, ExitCode: -1, StartedAt: started}
 	if err := ctx.Err(); err != nil {
 		return finishActionResult(result, ActionCancelled, nil, err)
 	}
@@ -347,6 +410,65 @@ func (r *ActionRunner) States() []ActionResult {
 	return states
 }
 
+// Result returns one current or retained run. Positive numbers are absolute;
+// negative numbers are offsets from the newest run (-1 is newest). The run
+// counter survives history eviction and configuration replacement.
+func (r *ActionRunner) Result(id config.ActionID, requested int) (ActionResult, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.actionExistsLocked(id) {
+		return ActionResult{}, fmt.Errorf("%w: %s/%s", ErrActionNotFound, id.Owner, id.Name)
+	}
+	latest := r.nextRun[id]
+	if latest == 0 || requested == 0 {
+		return ActionResult{}, fmt.Errorf("%w: %s/%s run %d", ErrActionRunNotFound, id.Owner, id.Name, requested)
+	}
+	var wanted uint32
+	if requested < 0 {
+		offset := uint32(-requested) - 1
+		if offset >= latest {
+			return ActionResult{}, fmt.Errorf("%w: %s/%s run offset %d", ErrActionRunNotFound, id.Owner, id.Name, requested)
+		}
+		wanted = latest - offset
+	} else {
+		wanted = uint32(requested)
+		if wanted > latest {
+			return ActionResult{}, fmt.Errorf("%w: %s/%s run %d", ErrActionRunNotFound, id.Owner, id.Name, requested)
+		}
+	}
+	if state, ok := r.states[id]; ok && state.Run == wanted && state.Status == ActionRunning {
+		state = cloneActionResult(state)
+		if active := r.activeActionLocked(id); active != nil && active.process != nil {
+			state.Stdout = append([]string(nil), active.process.Stdout().Lines()...)
+			state.Stderr = append([]string(nil), active.process.Stderr().Lines()...)
+			state.Duration = time.Since(state.StartedAt)
+		}
+		return state, nil
+	}
+	history := r.history[id]
+	for index := len(history) - 1; index >= 0; index-- {
+		if history[index].Run == wanted {
+			return cloneActionResult(history[index]), nil
+		}
+	}
+	oldest := latest + 1
+	if len(history) > 0 {
+		oldest = history[0].Run
+	}
+	if wanted < oldest {
+		return ActionResult{}, &ActionRunEvictedError{ID: id, Run: wanted, Oldest: oldest}
+	}
+	return ActionResult{}, fmt.Errorf("%w: %s/%s run %d", ErrActionRunNotFound, id.Owner, id.Name, wanted)
+}
+
+func (r *ActionRunner) retainResultLocked(result ActionResult) {
+	history := append(r.history[result.ID], cloneActionResult(result))
+	if len(history) > r.historySize {
+		history = append([]ActionResult(nil), history[len(history)-r.historySize:]...)
+	}
+	r.history[result.ID] = history
+}
+
 // Cancel requests termination of a running action.
 func (r *ActionRunner) Cancel(id config.ActionID) bool {
 	r.mu.RLock()
@@ -438,6 +560,12 @@ func (m *Manager) ActionState(id config.ActionID) (ActionResult, bool) {
 	return m.actions.State(id)
 }
 
+// ActionResult returns one current or retained execution by absolute run or
+// negative offset from the newest retained identity.
+func (m *Manager) ActionResult(id config.ActionID, run int) (ActionResult, error) {
+	return m.actions.Result(id, run)
+}
+
 // ActionStates returns deterministic snapshots of all configured actions.
 func (m *Manager) ActionStates() []ActionResult {
 	return m.actions.States()
@@ -489,6 +617,9 @@ func (r *ActionRunner) ClearActionLogs(id config.ActionID) {
 	if stream != nil {
 		stream.Clear()
 	}
+	r.mu.Lock()
+	delete(r.history, id)
+	r.mu.Unlock()
 }
 
 // startOutputPump copies a process's captured output into stream until the

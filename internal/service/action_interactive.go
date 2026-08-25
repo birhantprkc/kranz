@@ -54,12 +54,14 @@ func (r *ActionRunner) PrepareInteractive(id config.ActionID) (*exec.Cmd, func(e
 	}
 	r.active[owner] = active
 	started := time.Now()
-	r.states[id] = ActionResult{ID: id, Status: ActionRunning, ExitCode: -1, StartedAt: started}
+	run := r.nextRun[id] + 1
+	r.nextRun[id] = run
+	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started}
 	r.mu.Unlock()
 
 	finish := func(runErr error) ActionResult {
 		result := ActionResult{
-			ID: id, Status: ActionSucceeded, StartedAt: started,
+			ID: id, Run: run, Status: ActionSucceeded, StartedAt: started,
 			FinishedAt: time.Now(), Stdout: []string{interactiveHandoffNotice},
 		}
 		result.Duration = result.FinishedAt.Sub(result.StartedAt)
@@ -80,6 +82,7 @@ func (r *ActionRunner) PrepareInteractive(id config.ActionID) (*exec.Cmd, func(e
 		r.mu.Lock()
 		delete(r.active, owner)
 		r.states[id] = cloneActionResult(result)
+		r.retainResultLocked(result)
 		close(active.done)
 		r.mu.Unlock()
 		return result
@@ -123,7 +126,9 @@ func (r *ActionRunner) AcquireInteractive(id config.ActionID) (config.Action, st
 	}
 	r.active[owner] = active
 	started := time.Now()
-	r.states[id] = ActionResult{ID: id, Status: ActionRunning, ExitCode: -1, StartedAt: started}
+	run := r.nextRun[id] + 1
+	r.nextRun[id] = run
+	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started}
 	r.mu.Unlock()
 	return action, lease, nil
 }
@@ -139,11 +144,12 @@ func (r *ActionRunner) CompleteInteractive(id config.ActionID, lease string, exi
 		r.mu.Unlock()
 		return ActionResult{}, fmt.Errorf("interactive lease %q is not active for %s/%s", lease, id.Owner, id.Name)
 	}
-	started := r.states[id].StartedAt
+	state := r.states[id]
+	started, run := state.StartedAt, state.Run
 	r.mu.Unlock()
 
 	result := ActionResult{
-		ID: id, Status: ActionSucceeded, StartedAt: started,
+		ID: id, Run: run, Status: ActionSucceeded, StartedAt: started,
 		FinishedAt: time.Now(), Stdout: []string{interactiveHandoffNotice},
 		ExitCode: exitCode, PID: pid,
 	}
@@ -159,6 +165,7 @@ func (r *ActionRunner) CompleteInteractive(id config.ActionID, lease string, exi
 	r.mu.Lock()
 	delete(r.active, owner)
 	r.states[id] = cloneActionResult(result)
+	r.retainResultLocked(result)
 	close(active.done)
 	r.mu.Unlock()
 	return result, nil

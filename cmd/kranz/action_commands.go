@@ -7,6 +7,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/kranz-org/kranz/internal/app"
 	kranzcli "github.com/kranz-org/kranz/internal/cli"
 	"github.com/kranz-org/kranz/internal/config"
 	kranzruntime "github.com/kranz-org/kranz/internal/runtime"
@@ -200,21 +201,23 @@ func runActionRun(options kranzcli.GlobalOptions, args []string, stdout io.Write
 		return err
 	}
 
-	result, err := client.RunAction(context.Background(), id)
-	if err != nil {
-		return classifyRuntimeError(err)
+	operation, runErr := executeConfirmedPlan(client, app.PlanRequest{Operation: "action", Action: id}, options, stdout)
+	if operation.ActionResult == nil {
+		return classifyRuntimeError(runErr)
 	}
+	result := *operation.ActionResult
 
 	if options.Output == kranzcli.OutputJSON {
 		if err := kranzcli.WriteJSON(stdout, struct {
 			ID       string   `json:"id"`
+			Run      uint32   `json:"run"`
 			Status   string   `json:"status"`
 			ExitCode int      `json:"exit_code"`
 			Duration string   `json:"duration"`
 			Stdout   []string `json:"stdout"`
 			Stderr   []string `json:"stderr"`
 			Error    string   `json:"error"`
-		}{actionIDString(id), result.Status.String(), result.ExitCode, result.Duration.String(), actionOutputLines(result.Stdout), actionOutputLines(result.Stderr), result.Error}); err != nil {
+		}{actionIDString(id), result.Run, result.Status.String(), result.ExitCode, result.Duration.String(), actionOutputLines(result.Stdout), actionOutputLines(result.Stderr), result.Error}); err != nil {
 			return err
 		}
 	} else {
@@ -224,7 +227,7 @@ func runActionRun(options kranzcli.GlobalOptions, args []string, stdout io.Write
 		for _, line := range actionOutputLines(result.Stderr) {
 			_, _ = fmt.Fprintln(stdout, line)
 		}
-		_, _ = fmt.Fprintf(stdout, "%s %s in %s (exit %d)\n", actionIDString(id), result.Status, result.Duration.Round(1e6), result.ExitCode)
+		_, _ = fmt.Fprintf(stdout, "%s#%d %s in %s (exit %d)\n", actionIDString(id), result.Run, result.Status, result.Duration.Round(1e6), result.ExitCode)
 	}
 
 	// A failed action has to fail the command, or a script that runs a

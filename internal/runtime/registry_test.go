@@ -121,6 +121,36 @@ func TestRegistryListCleansStaleMetadataWithoutRemovingLock(t *testing.T) {
 	}
 }
 
+func TestResolveForAttachReportsStaleBeforeOwnerFallback(t *testing.T) {
+	registry, err := NewRegistry(filepath.Join(t.TempDir(), "registry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := registry.Acquire("stale-attach")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.Prepare("Stale Attach", "dev", "background", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscallUnlockAndClose(handle); err != nil {
+		t.Fatal(err)
+	}
+	record, err := registry.ResolveForAttach(context.Background(), "stale-attach", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State != SessionStale {
+		t.Fatalf("state = %s, want stale", record.State)
+	}
+	if _, err := registry.ResolveForAttach(context.Background(), "stale-attach", "dev"); err == nil {
+		t.Fatal("cleaned stale record remained resolvable")
+	}
+}
+
 func TestForceDownRefusesMismatchedSupervisorBirthIdentity(t *testing.T) {
 	registry, err := NewRegistry(filepath.Join(t.TempDir(), "registry"))
 	if err != nil {

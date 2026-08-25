@@ -10,12 +10,14 @@ import (
 	"github.com/kranz-org/kranz/internal/config"
 )
 
-func (hc *Checker) executeCheck(name string, cfg *config.CheckConfig) error {
+// executeCheck resolves the probe target and runs it, returning the target it
+// actually contacted so a failure can name the endpoint it tried.
+func (hc *Checker) executeCheck(name string, cfg *config.CheckConfig) (string, error) {
 	resolved, err := hc.resolveCheck(name, cfg)
 	if err != nil {
-		return err
+		return describeTarget(cfg), err
 	}
-	return executeCheck(name, resolved)
+	return describeTarget(resolved), executeCheck(name, resolved)
 }
 
 func (hc *Checker) resolveCheck(name string, cfg *config.CheckConfig) (*config.CheckConfig, error) {

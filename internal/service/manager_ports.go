@@ -100,7 +100,7 @@ func (m *Manager) refreshDetectedPorts(ctx context.Context) {
 		}
 	}
 	for name, target := range targets {
-		target.service.updateDetectedPorts(target.generation, portsByService[name])
+		target.service.updateDetectedPortsJournalled(target.generation, portsByService[name])
 	}
 }
 

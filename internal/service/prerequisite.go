@@ -62,7 +62,7 @@ func (m *Manager) runPrerequisite(ctx context.Context, svc *Service, prerequisit
 			return ctx.Err()
 		}
 		if active.err != nil {
-			return prerequisiteError(svc, label, active.err)
+			return prerequisiteError(svc, id, 0, label, active.err)
 		}
 		svc.AppendLog("[Kranz] Prerequisite satisfied: " + label)
 		return nil
@@ -73,6 +73,7 @@ func (m *Manager) runPrerequisite(ctx context.Context, svc *Service, prerequisit
 
 	svc.AppendLog("[Kranz] Running prerequisite: " + label)
 	result, err := m.actions.Run(ctx, id)
+	prerequisiteRun := result.Run
 	if err != nil {
 		err = describePrerequisiteFailure(result, err)
 	}
@@ -90,15 +91,39 @@ func (m *Manager) runPrerequisite(ctx context.Context, svc *Service, prerequisit
 	close(run.done)
 
 	if err != nil {
-		return prerequisiteError(svc, label, err)
+		return prerequisiteError(svc, id, prerequisiteRun, label, err)
 	}
 	svc.AppendLog("[Kranz] Prerequisite satisfied: " + label)
 	return nil
 }
 
-func prerequisiteError(svc *Service, label string, err error) error {
+// PrerequisiteError reports which service did not start, which action gated it,
+// and which run of that action failed. The same facts reach a structured client
+// as a causal error and stay on the service as its state cause.
+type PrerequisiteError struct {
+	Service string
+	Action  config.ActionID
+	Run     uint32
+	Label   string
+	Cause   error
+}
+
+func (e *PrerequisiteError) Error() string {
+	return fmt.Sprintf("%s not started: %s: %s %s", e.Service, ErrPrerequisiteFailed, e.Label, e.Cause)
+}
+
+func (e *PrerequisiteError) Unwrap() error { return e.Cause }
+
+// Is lets errors.Is(err, ErrPrerequisiteFailed) keep working for callers that
+// only need to know the kind of failure.
+func (e *PrerequisiteError) Is(target error) bool { return target == ErrPrerequisiteFailed }
+
+func prerequisiteError(svc *Service, id config.ActionID, run uint32, label string, err error) error {
+	// The service stays stopped for a reason a reader should not have to
+	// recover from log text: name the action and the run that failed.
+	svc.SetCause(&config.StateCause{Type: "prerequisite_failed", Action: id.Owner + "/" + id.Name, ActionRun: run, Message: err.Error()})
 	svc.AppendLog(fmt.Sprintf("[Kranz] Prerequisite failed: %s · %s", label, err))
-	return fmt.Errorf("%s not started: %w: %s %w", svc.Name, ErrPrerequisiteFailed, label, err)
+	return &PrerequisiteError{Service: svc.Name, Action: id, Run: run, Label: label, Cause: err}
 }
 
 // describePrerequisiteFailure turns a runner error into one short clause that

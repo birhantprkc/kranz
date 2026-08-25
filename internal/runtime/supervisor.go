@@ -34,6 +34,9 @@ type Supervisor struct {
 	socketPath string
 
 	clients atomic.Int64
+	connMu  sync.Mutex
+	conns   map[*net.UnixConn]struct{}
+	closing bool
 
 	stopWatch chan struct{}
 	watchDone chan struct{}
@@ -42,6 +45,7 @@ type Supervisor struct {
 	connWG sync.WaitGroup
 
 	closeOnce                 sync.Once
+	closeErr                  error
 	closed                    chan struct{}
 	shutdownOnce              sync.Once
 	shutdownRequested         chan struct{}
@@ -58,6 +62,7 @@ type Supervisor struct {
 func NewSupervisor(local *app.Local) *Supervisor {
 	return &Supervisor{
 		local:                   local,
+		conns:                   make(map[*net.UnixConn]struct{}),
 		stopWatch:               make(chan struct{}),
 		watchDone:               make(chan struct{}),
 		closed:                  make(chan struct{}),
@@ -109,9 +114,22 @@ func (s *Supervisor) Serve() error {
 				return fmt.Errorf("accept connection: %w", err)
 			}
 		}
+		s.connMu.Lock()
+		if s.closing {
+			s.connMu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.conns[conn] = struct{}{}
 		s.connWG.Add(1)
+		s.connMu.Unlock()
 		go func() {
-			defer s.connWG.Done()
+			defer func() {
+				s.connMu.Lock()
+				delete(s.conns, conn)
+				s.connMu.Unlock()
+				s.connWG.Done()
+			}()
 			s.handleConn(conn)
 		}()
 	}
@@ -125,15 +143,25 @@ func (s *Supervisor) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.closed)
 		close(s.stopWatch)
+		s.connMu.Lock()
+		s.closing = true
+		connections := make([]*net.UnixConn, 0, len(s.conns))
+		for conn := range s.conns {
+			connections = append(connections, conn)
+		}
+		s.connMu.Unlock()
+		if s.listener != nil {
+			s.closeErr = s.listener.Close()
+		}
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
 	})
-	var err error
-	if s.listener != nil {
-		err = s.listener.Close()
-	}
 	if s.watching.Load() {
 		<-s.watchDone
 	}
-	return err
+	s.connWG.Wait()
+	return s.closeErr
 }
 
 // runReloadWatcher drives configuration reload while no client is connected,
@@ -328,7 +356,12 @@ func (s *Supervisor) dispatch(ctx context.Context, c *codec, msg envelope, lease
 		result, err = entry(ctx, s.local, msg.Body)
 	}
 	if err != nil {
-		body, marshalErr := json.Marshal(encodeError(err))
+		payload := encodeError(err)
+		var execution *app.OperationExecutionError
+		if errors.As(err, &execution) {
+			payload.OperationResult = &execution.Result
+		}
+		body, marshalErr := json.Marshal(payload)
 		if marshalErr != nil {
 			body, _ = json.Marshal(errorPayload{Kind: errorGeneric, Message: err.Error()})
 		}

@@ -1,6 +1,10 @@
 package runtime
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/kranz-org/kranz/internal/app"
+)
 
 // protocolVersion is both protocol_min and protocol_max Kranz speaks today.
 // The README's versioning contract (a session advertises a [min, max] range
@@ -8,7 +12,7 @@ import "encoding/json"
 // only has one build to negotiate between right now; a later stream that
 // changes the wire format widens the range instead of just bumping this
 // constant.
-const protocolVersion = 1
+const protocolVersion = 2
 
 // messageType identifies what an envelope carries. The envelope shape itself
 // (v, type, id, method, body) is deliberately small and stable so a peer can
@@ -58,9 +62,21 @@ type helloResponse struct {
 type errorKind string
 
 const (
-	errorGeneric         errorKind = "generic"
-	errorVersionMismatch errorKind = "version_mismatch"
-	errorPortConflict    errorKind = "port_conflict"
+	errorGeneric              errorKind = "generic"
+	errorVersionMismatch      errorKind = "version_mismatch"
+	errorPortConflict         errorKind = "port_conflict"
+	errorActionNotFound       errorKind = "action_not_found"
+	errorActionRunNotFound    errorKind = "action_run_not_found"
+	errorActionRunEvicted     errorKind = "action_run_evicted"
+	errorLogQuery             errorKind = "log_query"
+	errorConfirmationRequired errorKind = "confirmation_required"
+	errorConfirmation         errorKind = "confirmation"
+	errorWait                 errorKind = "wait"
+	errorActionBusy           errorKind = "action_busy"
+	errorActionExit           errorKind = "action_exit"
+	errorActionTimedOut       errorKind = "action_timed_out"
+	errorActionCancelled      errorKind = "action_cancelled"
+	errorPrerequisite         errorKind = "prerequisite_failed"
 )
 
 // errorPayload is the body of a messageError envelope.
@@ -76,11 +92,26 @@ type errorPayload struct {
 
 	// Populated only when Kind == errorPortConflict, mirroring
 	// app.PortConflictError's fields.
-	Service      string `json:"service,omitempty"`
-	Port         int    `json:"port,omitempty"`
-	PID          int    `json:"pid,omitempty"`
-	Process      string `json:"process,omitempty"`
-	Command      string `json:"command,omitempty"`
-	OwnerService string `json:"ownerService,omitempty"`
-	External     bool   `json:"external,omitempty"`
+	Service            string                 `json:"service,omitempty"`
+	Port               int                    `json:"port,omitempty"`
+	PID                int                    `json:"pid,omitempty"`
+	Process            string                 `json:"process,omitempty"`
+	Command            string                 `json:"command,omitempty"`
+	OwnerService       string                 `json:"ownerService,omitempty"`
+	External           bool                   `json:"external,omitempty"`
+	ActionOwner        string                 `json:"action_owner,omitempty"`
+	ActionName         string                 `json:"action_name,omitempty"`
+	Run                uint32                 `json:"run,omitempty"`
+	OldestRun          uint32                 `json:"oldest_run,omitempty"`
+	Code               string                 `json:"code,omitempty"`
+	Hint               string                 `json:"hint,omitempty"`
+	Selector           string                 `json:"selector,omitempty"`
+	Plan               *app.OperationPlan     `json:"plan,omitempty"`
+	Services           []*app.ServiceSnapshot `json:"services,omitempty"`
+	OperationResult    *app.OperationResult   `json:"operation_result,omitempty"`
+	RunningActionOwner string                 `json:"running_action_owner,omitempty"`
+	RunningActionName  string                 `json:"running_action_name,omitempty"`
+	ActionExitCode     int                    `json:"action_exit_code,omitempty"`
+	PrerequisiteLabel  string                 `json:"prerequisite_label,omitempty"`
+	PrerequisiteCause  string                 `json:"prerequisite_cause,omitempty"`
 }

@@ -53,6 +53,17 @@ func (s *logStream) BeginRun() uint32 {
 	return s.currentRun
 }
 
+// BeginRunNumber aligns the stream with the ActionRunner-owned run identity.
+// It never moves backwards, so clearing or replacing a log buffer cannot make
+// an old address refer to a new execution.
+func (s *logStream) BeginRunNumber(run uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run > s.currentRun {
+		s.currentRun = run
+	}
+}
+
 // LastRun returns the most recent run number, or zero when nothing has run.
 func (s *logStream) LastRun() uint32 {
 	s.mu.RLock()

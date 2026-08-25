@@ -18,6 +18,7 @@ type Options struct {
 	PortChecker     port.Checker
 	HealthChecker   *health.Checker
 	ListenerScanner port.ListenerScanner
+	SessionID       string
 }
 
 // Local implements API directly over a service.Manager living in this
@@ -27,6 +28,10 @@ type Options struct {
 type Local struct {
 	manager       *service.Manager
 	healthChecker *health.Checker
+	sessionID     string
+
+	confirmMu     sync.Mutex
+	confirmations map[string]confirmationRecord
 
 	portMu      sync.RWMutex
 	portChecker port.Checker
@@ -80,6 +85,8 @@ func NewLocal(cfg *config.Config, configPaths []string, opts Options) *Local {
 		manager:       manager,
 		healthChecker: healthChecker,
 		portChecker:   portChecker,
+		sessionID:     opts.SessionID,
+		confirmations: make(map[string]confirmationRecord),
 		cfg:           cfg,
 		configPaths:   paths,
 		watchPaths:    watchPaths,
@@ -97,11 +104,14 @@ func (l *Local) Config() *config.Config {
 	return l.cfg
 }
 
+func (l *Local) RedactedConfig() (*config.Config, error) { return config.RedactedCopy(l.Config()) }
+
 func (l *Local) Project() ProjectSnapshot {
 	l.cfgMu.RLock()
 	defer l.cfgMu.RUnlock()
 	return ProjectSnapshot{
 		Name:            l.cfg.Project,
+		SessionID:       l.sessionID,
 		Source:          l.cfg.Source,
 		ConfigPaths:     append([]string(nil), l.configPaths...),
 		WatchPaths:      append([]string(nil), l.watchPaths...),
@@ -124,16 +134,50 @@ func (l *Local) snapshotOf(svc *service.Service) *ServiceSnapshot {
 	}
 	if l.healthChecker != nil {
 		if h := l.healthChecker.GetHealth(svc.Name); h != nil {
+			readiness, liveness := h.Probes()
 			snapshot.Health = HealthSnapshot{
 				Observed:   true,
 				Ready:      h.IsReady(),
 				Alive:      h.IsAlive(),
 				ReadySince: h.GetReadySince(),
 				LastCheck:  h.GetLastCheck(),
+				Readiness:  readiness,
+				Liveness:   liveness,
 			}
 		}
 	}
+	if snapshot.State.Cause == nil {
+		snapshot.State.Cause = l.dependencyCause(snapshot)
+	}
 	return snapshot
+}
+
+// dependencyCause explains a service that wants to run but is stopped because
+// something it depends on terminated unsuccessfully. It is derived rather than
+// recorded: the dependency can fail at any time after this service gave up, so
+// the fact is only true relative to the moment it is read.
+func (l *Local) dependencyCause(snapshot *ServiceSnapshot) *config.StateCause {
+	if !snapshot.DesiredRunning || snapshot.State.Status != config.StatusStopped {
+		return nil
+	}
+	for _, dependency := range snapshot.Config.DependsOn {
+		svc, ok := l.manager.GetService(dependency)
+		if !ok {
+			continue
+		}
+		state := svc.GetState()
+		if !state.Completed || state.ExitCode == 0 {
+			continue
+		}
+		exit := state.ExitCode
+		return &config.StateCause{
+			Type:       "dependency_failed",
+			Dependency: dependency,
+			ExitCode:   &exit,
+			Message:    fmt.Sprintf("dependency %s exited with code %d", dependency, state.ExitCode),
+		}
+	}
+	return nil
 }
 
 func (l *Local) Services() []*ServiceSnapshot {
@@ -279,6 +323,10 @@ func (l *Local) ActionState(id config.ActionID) (ActionResult, bool) {
 	return l.manager.ActionState(id)
 }
 
+func (l *Local) ActionResult(id config.ActionID, run int) (ActionResult, error) {
+	return l.manager.ActionResult(id, run)
+}
+
 func (l *Local) CancelAction(id config.ActionID) bool {
 	return l.manager.CancelAction(id)
 }
@@ -301,6 +349,10 @@ func (l *Local) Logs(name string) []config.LogEntry {
 
 func (l *Local) ActionLogs(id config.ActionID) []config.LogEntry {
 	return l.manager.ActionLogs(id)
+}
+
+func (l *Local) QueryLogs(query LogQuery) (LogResult, error) {
+	return queryLogs(l, query)
 }
 
 func (l *Local) ClearActionLogs(id config.ActionID) { l.manager.ClearActionLogs(id) }

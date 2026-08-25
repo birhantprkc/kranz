@@ -413,6 +413,15 @@ func TestSelectionAndActionSuccessUseDistinctMarkers(t *testing.T) {
 	}
 }
 
+func TestActionRunNameShowsStableRunIdentity(t *testing.T) {
+	if got := actionRunName("migrate", 7); got != "migrate#7" {
+		t.Fatalf("name = %q", got)
+	}
+	if got := actionRunName("migrate", 0); got != "migrate" {
+		t.Fatalf("ready name = %q", got)
+	}
+}
+
 func TestActionOnlyGroupIsFocusableAndRunnable(t *testing.T) {
 	model := NewModel(&config.Config{Project: "Tools", ActionGroups: map[string]config.ActionGroup{
 		"tools": {

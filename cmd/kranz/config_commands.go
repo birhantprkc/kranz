@@ -19,20 +19,7 @@ import (
 // layered configuration: what Kranz ended up with, and which file put it
 // there. Both read the same layers the loader reads.
 
-// secretKeyFragments identify environment variables whose value must never be
-// printed. Redaction is by key rather than by value shape, because a password
-// is not distinguishable from any other string once it is out of context.
-var secretKeyFragments = []string{"PASSWORD", "PASSWD", "SECRET", "TOKEN", "APIKEY", "API_KEY", "PRIVATE_KEY", "ACCESS_KEY", "CREDENTIAL", "AUTH", "SESSION_KEY", "SIGNING", "DSN"}
-
-func isSecretKey(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, fragment := range secretKeyFragments {
-		if strings.Contains(upper, fragment) {
-			return true
-		}
-	}
-	return false
-}
+func isSecretKey(name string) bool { return config.IsSecretKey(name) }
 
 func runConfigShow(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
 	provenance := false
@@ -95,7 +82,7 @@ func effectiveDocument(cfg *config.Config) (*yaml.Node, error) {
 		group := mappingValue(mappingValue(root, "action_groups"), name)
 		orderMapping(mappingValue(group, "actions"), cfg.ActionGroups[name].ActionOrder)
 	}
-	redactEnvironment(root)
+	config.RedactYAMLNode(root)
 	return root, nil
 }
 
@@ -147,32 +134,6 @@ func orderMapping(mapping *yaml.Node, order []string) {
 // redactEnvironment replaces the value of every secret-looking environment
 // variable anywhere in the document. It walks the whole tree because env
 // mappings appear under defaults, services, action groups, and actions.
-func redactEnvironment(node *yaml.Node) {
-	if node == nil {
-		return
-	}
-	if node.Kind == yaml.MappingNode {
-		for index := 0; index+1 < len(node.Content); index += 2 {
-			key, value := node.Content[index], node.Content[index+1]
-			if key.Value == "env" && value.Kind == yaml.MappingNode {
-				for envIndex := 0; envIndex+1 < len(value.Content); envIndex += 2 {
-					if isSecretKey(value.Content[envIndex].Value) {
-						value.Content[envIndex+1].Value = "[redacted]"
-						value.Content[envIndex+1].Tag = "!!str"
-						value.Content[envIndex+1].Style = 0
-					}
-				}
-				continue
-			}
-			redactEnvironment(value)
-		}
-		return
-	}
-	for _, child := range node.Content {
-		redactEnvironment(child)
-	}
-}
-
 // annotateProvenance writes the file that last set each leaf as a line comment,
 // so `config show --provenance` reads as the effective file plus its sources.
 func annotateProvenance(node *yaml.Node, path []string, sources map[string]string) {

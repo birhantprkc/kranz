@@ -244,6 +244,10 @@ func (c *Client) Config() *config.Config {
 	return resp
 }
 
+func (c *Client) RedactedConfig() (*config.Config, error) {
+	return call[emptyRequest, *config.Config](c, context.Background(), methodRedactedConfig, emptyRequest{})
+}
+
 func (c *Client) Reload(force bool) (app.ReloadResult, error) {
 	return call[reloadRequest, app.ReloadResult](c, context.Background(), methodReload, reloadRequest{Force: force})
 }
@@ -294,6 +298,37 @@ func (c *Client) AffectedServices(name string) []string {
 func (c *Client) ShutdownPlan() app.ShutdownPlan {
 	resp, _ := call[emptyRequest, shutdownPlanResponse](c, context.Background(), methodShutdownPlan, emptyRequest{})
 	return resp.Plan
+}
+
+func (c *Client) Plan(request app.PlanRequest) (app.OperationPlan, error) {
+	return call[app.PlanRequest, app.OperationPlan](c, context.Background(), methodPlan, request)
+}
+
+func (c *Client) ExecutePlan(ctx context.Context, request app.PlanRequest, confirmationToken string) (app.OperationResult, error) {
+	result, err := call[executePlanRequest, app.OperationResult](c, ctx, methodExecutePlan, executePlanRequest{Request: request, ConfirmationToken: confirmationToken})
+	var execution *app.OperationExecutionError
+	if errors.As(err, &execution) {
+		return execution.Result, execution.Cause
+	}
+	return result, err
+}
+
+func (c *Client) Changes(query app.ChangeQuery) (app.ChangeResult, error) {
+	return call[app.ChangeQuery, app.ChangeResult](c, context.Background(), methodChanges, query)
+}
+
+func (c *Client) Graph() app.Graph {
+	graph, _ := call[emptyRequest, app.Graph](c, context.Background(), methodGraph, emptyRequest{})
+	return graph
+}
+
+func (c *Client) Preflight() app.PreflightResult {
+	result, _ := call[emptyRequest, app.PreflightResult](c, context.Background(), methodPreflight, emptyRequest{})
+	return result
+}
+
+func (c *Client) Wait(ctx context.Context, request app.WaitRequest) (app.WaitResult, error) {
+	return call[app.WaitRequest, app.WaitResult](c, ctx, methodWait, request)
 }
 
 func (c *Client) StartServicesContext(ctx context.Context, names []string) error {
@@ -363,6 +398,10 @@ func (c *Client) ActionState(id config.ActionID) (app.ActionResult, bool) {
 	return resp.Result, resp.Ok
 }
 
+func (c *Client) ActionResult(id config.ActionID, run int) (app.ActionResult, error) {
+	return call[actionResultRequest, app.ActionResult](c, context.Background(), methodActionResult, actionResultRequest{ID: id, Run: run})
+}
+
 func (c *Client) CancelAction(id config.ActionID) bool {
 	resp, _ := call[actionIDRequest, cancelActionResponse](c, context.Background(), methodCancelAction, actionIDRequest{ID: id})
 	return resp.Cancelled
@@ -389,6 +428,15 @@ func (c *Client) Logs(name string) []config.LogEntry {
 func (c *Client) ActionLogs(id config.ActionID) []config.LogEntry {
 	resp, _ := call[actionIDRequest, logsResponse](c, context.Background(), methodActionLogs, actionIDRequest{ID: id})
 	return resp.Entries
+}
+
+func (c *Client) QueryLogs(query app.LogQuery) (app.LogResult, error) {
+	return call[app.LogQuery, app.LogResult](c, context.Background(), methodQueryLogs, query)
+}
+
+func (c *Client) ClearLogStreams(selectors []string, withActions bool) ([]string, error) {
+	resp, err := call[clearLogStreamsRequest, namesResponse](c, context.Background(), methodClearLogStreams, clearLogStreamsRequest{Selectors: selectors, WithActions: withActions})
+	return resp.Names, err
 }
 
 func (c *Client) ClearActionLogs(id config.ActionID) {

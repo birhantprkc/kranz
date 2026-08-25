@@ -128,7 +128,7 @@ func TestDoctorJSONKeepsAFailedPreflightToOneUsefulEnvelope(t *testing.T) {
 		t.Fatalf("stdout/stderr = %q/%q", stdout.String(), stderr.String())
 	}
 	var envelope struct {
-		Data doctorResult `json:"data"`
+		Data app.PreflightResult `json:"data"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
@@ -386,15 +386,6 @@ func TestEverySelectorResolverAgreesOnWhatANameMeans(t *testing.T) {
 	if len(planned) != len(byName) || planned[0] != byName[0] {
 		t.Errorf("plan resolved %v but the lifecycle commands resolve %v", planned, byName)
 	}
-	// The log targets are the same rule with actions layered on top.
-	logged, err := resolveLogTargets(cfg, []string{"api"}, false)
-	if err != nil {
-		t.Fatalf("resolveLogTargets = %v", err)
-	}
-	if got := targetAddresses(logged); len(got) != 1 || got[0] != "api" {
-		t.Errorf("logs resolved %v but the lifecycle commands resolve %v", got, byName)
-	}
-
 	// A word no service answers to is tried as a tag, everywhere alike.
 	for name, resolve := range map[string]func() ([]string, error){
 		"lifecycle":  func() ([]string, error) { return resolveServiceSelectors(cfg, []string{"background"}) },

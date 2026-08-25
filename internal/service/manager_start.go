@@ -68,6 +68,8 @@ func (m *Manager) startService(ctx context.Context, name string, recovery bool) 
 				if info, ok := portsInfo[port]; ok && info != nil {
 					owner := m.ManagedServiceForPID(info.PID)
 					svc.SetDesiredRunning(false)
+					svc.SetCause(&config.StateCause{Type: "port_conflict", Port: port, PID: info.PID, Process: info.Process,
+						Message: fmt.Sprintf("port %d is held by another process", port)})
 					return &PortConflictError{
 						Service:      name,
 						Port:         port,
@@ -105,6 +107,7 @@ func (m *Manager) startService(ctx context.Context, name string, recovery bool) 
 	pid, err := pm.Start(context.Background(), start.Command, start.Dir, start.Env, start.Shell)
 	if err != nil {
 		svc.SetDesiredRunning(false)
+		svc.SetCause(&config.StateCause{Type: "start_failed", Message: err.Error()})
 		svc.SetStatus(config.StatusStopped)
 		svc.AppendLog("[Kranz] Start failed: " + err.Error())
 		return fmt.Errorf("start service %q: %w", name, err)

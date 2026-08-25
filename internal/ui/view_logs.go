@@ -61,7 +61,8 @@ func (m *Model) renderActionLogPanel(width, height int) string {
 	if !exists {
 		return renderTitledPanel(m.panelStyle(panelLogs), m.panelTitleStyle(panelLogs), contentWidth, contentHeight, "[3] ACTION OUTPUT", []string{"", "Select an action"})
 	}
-	title := "[3] ACTION OUTPUT" + ContextBarStyle.Render(" │ ") + actionStatusIndicator(state.Status) + " " + ServiceNameStyle.Render(id.Name) + ContextBarStyle.Render(" · "+state.Status.String())
+	name := actionRunName(id.Name, state.Run)
+	title := "[3] ACTION OUTPUT" + ContextBarStyle.Render(" │ ") + actionStatusIndicator(state.Status) + " " + ServiceNameStyle.Render(name) + ContextBarStyle.Render(" · "+state.Status.String())
 	if state.Status == app.ActionRunning {
 		title += StartingBadgeStyle.Render(" RUNNING")
 	}
