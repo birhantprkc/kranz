@@ -32,10 +32,20 @@ export default defineConfig({
           { text: 'What is Kranz?', link: '/guide/what-is-kranz' },
           { text: 'Installation', link: '/guide/installation' },
           { text: 'Getting started', link: '/guide/getting-started' },
-          { text: 'Core concepts', link: '/guide/core-concepts' },
-          { text: 'Using the terminal interface', link: '/guide/tui' },
-          { text: 'Working from the command line', link: '/guide/cli-workflow' },
-          { text: 'Coding agents with MCP', link: '/guide/mcp' },
+          { text: 'Core concepts', link: '/guide/core-concepts' }
+        ]
+      },
+      {
+        text: 'TUI, CLI & MCP',
+        items: [
+          { text: 'TUI · Terminal interface', link: '/guide/tui' },
+          { text: 'CLI · Command line', link: '/guide/cli-workflow' },
+          { text: 'MCP · Coding agents', link: '/guide/mcp' }
+        ]
+      },
+      {
+        text: 'Workflows',
+        items: [
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Lifecycle', link: '/guide/lifecycle' },
           { text: 'Actions', link: '/guide/actions' },

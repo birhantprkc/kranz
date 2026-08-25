@@ -4,6 +4,8 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-25
+
 ### Added
 
 - A foreground stdio MCP adapter in the existing `kranz` binary. Coding agents

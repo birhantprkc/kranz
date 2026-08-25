@@ -28,7 +28,19 @@ Compose when containers remain the right home for infrastructure.
   <img src="docs/assets/kranz-demo.gif" alt="Kranz terminal interface">
 </p>
 
-## Coding agents join your live session
+## TUI, CLI, and MCP
+
+Kranz exposes one runtime through three views:
+
+- **TUI** — the keyboard-first operator view for services, details, logs,
+  lifecycle plans, actions, health history, and notifications;
+- **CLI** — the terminal and scripting view, including stable JSON results;
+- **MCP** — the coding-agent view over the same application operations.
+
+They use the same supervisor. A service restarted by a command or coding agent
+changes immediately in the open TUI; none of these views starts a second stack.
+
+### Coding agents join your live session
 
 Kranz MCP gives a coding agent the same services, actions, readiness, ports,
 and bounded logs visible in the TUI. It attaches to the existing runtime instead
@@ -72,9 +84,9 @@ the web listener automatically and shows both services' state and logs.
 Already using a supported `process-compose.yaml`? Run `kranz` beside it. Use
 native `kranz.yaml` when you need the complete lifecycle model.
 
-## Command line
+### Command line
 
-The TUI is optional. Kranz 0.8 adds a complete CLI for starting a project in
+The TUI is optional. Kranz includes a complete CLI for starting a project in
 the background, inspecting it from another terminal, acting on services, and
 returning stable JSON to scripts:
 
@@ -110,13 +122,13 @@ for every command, option, output contract, and exit code.
 ## Documentation
 
 - [Getting started](https://kranz-org.github.io/kranz/guide/getting-started)
-- [Using the terminal interface](https://kranz-org.github.io/kranz/guide/tui)
-- [Working from the command line](https://kranz-org.github.io/kranz/guide/cli-workflow)
+- [TUI · Terminal interface](https://kranz-org.github.io/kranz/guide/tui)
+- [CLI · Command line](https://kranz-org.github.io/kranz/guide/cli-workflow)
+- [MCP · Coding agents](https://kranz-org.github.io/kranz/guide/mcp)
 - [Configuration and lifecycle](https://kranz-org.github.io/kranz/guide/configuration)
 - [Configuration reference](https://kranz-org.github.io/kranz/reference/configuration)
 - [Annotated kranz.yaml](https://kranz-org.github.io/kranz/reference/kranz-yaml)
 - [CLI reference](https://kranz-org.github.io/kranz/reference/cli)
-- [MCP setup](https://kranz-org.github.io/kranz/guide/mcp)
 - [MCP server reference](https://kranz-org.github.io/kranz/reference/mcp)
 - [Keyboard shortcuts](https://kranz-org.github.io/kranz/reference/controls)
 - [Troubleshooting](https://kranz-org.github.io/kranz/guide/troubleshooting)
