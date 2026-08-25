@@ -142,13 +142,14 @@ func DefaultTree() *Command {
 			{Flags: "--force", Summary: "discard a runtime that no longer answers its socket"},
 		}},
 		{Name: "attach", Summary: "open the TUI for an active runtime"},
+		{Name: "mcp", Summary: "serve the selected runtime over MCP stdio", Usage: "kranz mcp"},
 		{Name: "logs", Summary: "show and clear logs", Default: "show", Children: []*Command{
 			{Name: "show", Summary: "show service and action logs", Usage: "kranz logs [SELECTOR ...] [--tail N | --all] [--since D]\n  [--run N | --runs N] [--source S] [--with-actions]\n  [--plain | --no-timestamps | --no-labels] [--follow]", Options: []Option{
 				{Flags: "--tail N", Summary: "show the last N lines; a service defaults to 50"},
 				{Flags: "--all", Summary: "show every buffered line, however far back it goes"},
 				{Flags: "--since D", Summary: "show lines newer than a duration such as 5m or 2h"},
-				{Flags: "--run N", Summary: "show one execution of an action: run number N, or a negative offset from the newest buffered run, so -1 is the latest and -2 the one before it"},
-				{Flags: "--runs N", Summary: "show the last N executions of an action"},
+				{Flags: "--run N", Summary: "show one execution of a service or action: run number N, or a negative offset from the newest buffered run, so -1 is the latest and -2 the one before it"},
+				{Flags: "--runs N", Summary: "show the last N executions of a service or action"},
 				{Flags: "--source S", Summary: "keep only stdout, stderr, or kranz; comma-separated", Values: []string{"stdout", "stderr", "kranz"}},
 				{Flags: "--with-actions", Summary: "fold the actions an owner has run into its timeline"},
 				{Flags: "--plain", Summary: "print the output as the command printed it"},

@@ -498,6 +498,31 @@ func TestHelpUsesCommandTree(t *testing.T) {
 	}
 }
 
+func TestMCPHelpAcceptsGlobalOptionsBeforeAndAfterCommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"-C", "/tmp/project", "mcp", "--help"},
+		{"mcp", "-C", "/tmp/project", "--help"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := execute(args, &stdout, &stderr); code != 0 {
+			t.Fatalf("execute(%q) exit = %d, stderr = %q", args, code, stderr.String())
+		}
+		for _, expected := range []string{
+			"kranz mcp — serve the selected runtime over MCP stdio",
+			"Usage:\n  kranz mcp",
+			"-C, --directory DIR",
+			"-p, --project VALUE",
+		} {
+			if !strings.Contains(stdout.String(), expected) {
+				t.Errorf("execute(%q) help missing %q:\n%s", args, expected, stdout.String())
+			}
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("execute(%q) stderr = %q", args, stderr.String())
+		}
+	}
+}
+
 func TestPositionalYAMLPrintsMigrationHint(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := execute([]string{"prod.yaml"}, &stdout, &stderr); code != 2 {

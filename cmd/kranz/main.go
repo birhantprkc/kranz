@@ -37,6 +37,10 @@ func execute(args []string, stdout, stderr io.Writer) int {
 	tree := kranzcli.DefaultTree()
 	invocation, err := kranzcli.Parse(tree, args)
 	if err != nil {
+		if containsMCPCommand(args) {
+			_, _ = fmt.Fprintln(stderr, err)
+			return kranzcli.ExitUsage
+		}
 		return kranzcli.WriteError(stdout, stderr, kranzcli.RequestedOutput(args), err)
 	}
 
@@ -67,6 +71,17 @@ func execute(args []string, stdout, stderr io.Writer) int {
 
 	if invocation.Command() == "version" {
 		return writeVersion(stdout, stderr, invocation.Globals.Output)
+	}
+	if invocation.Command() == "mcp" {
+		if len(invocation.Args) != 0 {
+			_, _ = fmt.Fprintln(stderr, "Kranz MCP: mcp does not accept positional arguments")
+			return kranzcli.ExitUsage
+		}
+		if err := runMCP(invocation.Globals, stdout, stderr); err != nil {
+			_, _ = fmt.Fprintf(stderr, "Kranz MCP: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	// The inspection commands describe a project from its configuration and
 	// never touch a runtime, so they are dispatched before anything that
@@ -255,6 +270,15 @@ func execute(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func containsMCPCommand(args []string) bool {
+	for _, arg := range args {
+		if arg == "mcp" {
+			return true
+		}
+	}
+	return false
+}
+
 func runPS(options kranzcli.GlobalOptions, stdout, stderr io.Writer) int {
 	registry, err := kranzruntime.DefaultRegistry()
 	if err != nil {
@@ -421,7 +445,7 @@ func runTUI(options kranzcli.GlobalOptions) (runErr error) {
 	// The runtime always speaks the socket protocol, even for an ordinary
 	// foreground `kranz` with no other client. The published registry session
 	// lets ps and later attach/down clients discover this same supervisor.
-	local := app.NewLocal(cfg, cfgPaths, app.Options{})
+	local := app.NewLocal(cfg, cfgPaths, app.Options{SessionID: metadata.ID})
 	supervisor := kranzruntime.NewSupervisor(local)
 	if err := supervisor.Listen(metadata.Socket); err != nil {
 		return fmt.Errorf("start runtime supervisor: %w", err)
@@ -433,6 +457,10 @@ func runTUI(options kranzcli.GlobalOptions) (runErr error) {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- supervisor.Serve() }()
 	defer func() {
+		// Make the old session undiscoverable before attached clients receive
+		// EOF. A supervised MCP bridge may restart immediately on disconnect;
+		// it must see a free registry entry rather than stale locked metadata.
+		runErr = errors.Join(runErr, session.Close())
 		runErr = errors.Join(runErr, supervisor.Close())
 		if err := <-serveErr; err != nil {
 			runErr = errors.Join(runErr, err)

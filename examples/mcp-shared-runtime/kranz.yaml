@@ -1,0 +1,29 @@
+project: mcp-shared-runtime
+
+defaults:
+  dir: .
+  shell: /bin/sh
+
+services:
+  api:
+    command: python3 -u api.py
+    ports: [18931]
+    tags: [backend]
+    healthcheck:
+      readiness: {type: http, url: "http://127.0.0.1:18931/ready", interval: 250ms, timeout: 1s}
+    actions:
+      migrate:
+        command: echo "migration complete; schema=42"
+  web:
+    command: python3 -u -m http.server 18932 --bind 127.0.0.1
+    ports: [18932]
+    tags: [frontend]
+    depends_on: [api]
+    dependency_conditions:
+      api: {condition: process_healthy}
+  worker:
+    command: while true; do echo "worker heartbeat"; sleep 3; done
+    tags: [workers]
+    depends_on: [api]
+    dependency_conditions:
+      api: {condition: process_healthy}
