@@ -36,11 +36,11 @@ export default defineConfig({
         ]
       },
       {
-        text: 'TUI, CLI & MCP',
+        text: 'Interfaces',
         items: [
-          { text: 'TUI · Terminal interface', link: '/guide/tui' },
-          { text: 'CLI · Command line', link: '/guide/cli-workflow' },
-          { text: 'MCP · Coding agents', link: '/guide/mcp' }
+          { text: 'TUI', link: '/guide/tui' },
+          { text: 'CLI', link: '/guide/cli-workflow' },
+          { text: 'MCP', link: '/guide/mcp' }
         ]
       },
       {
