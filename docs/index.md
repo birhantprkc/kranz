@@ -27,8 +27,12 @@ features:
     details: Separate readiness, liveness, lifecycle status, runtime port discovery, and explicit unknown state.
   - title: Operations beside services
     details: Run migrations, builds, checks, and project actions with captured output, timeout, and confirmation.
+  - title: One runtime for people and agents
+    details: Let coding agents inspect and operate the same live session through the built-in MCP server.
   - title: Bring your existing config
     details: Start with a Procfile, a supported Process Compose file, or native Kranz YAML when you need the full model.
+  - title: Foreground by design
+    details: Keep ownership visible and cleanup predictable, without a hidden daemon or second control plane.
 ---
 
 <div class="demo-frame demo-frame--hero">
@@ -68,6 +72,7 @@ Start with [What is Kranz?](./guide/what-is-kranz), then follow the
 | A larger API/worker graph | [Full-stack example](./examples/full-stack) |
 | Migrations or setup that must run first | [Prerequisites example](./examples/prerequisites) |
 | Processes that choose ports at runtime | [Runtime-port laboratory](./examples/runtime-ports) |
+| A coding agent that should join your live stack | [MCP shared-runtime example](./examples/mcp-shared-runtime) |
 
 ## What Kranz keeps together
 

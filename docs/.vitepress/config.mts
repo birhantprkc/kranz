@@ -30,10 +30,12 @@ export default defineConfig({
         text: 'Guide',
         items: [
           { text: 'What is Kranz?', link: '/guide/what-is-kranz' },
+          { text: 'Installation', link: '/guide/installation' },
           { text: 'Getting started', link: '/guide/getting-started' },
           { text: 'Core concepts', link: '/guide/core-concepts' },
+          { text: 'Using the terminal interface', link: '/guide/tui' },
           { text: 'Working from the command line', link: '/guide/cli-workflow' },
-          { text: 'Installation', link: '/guide/installation' },
+          { text: 'Coding agents with MCP', link: '/guide/mcp' },
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Lifecycle', link: '/guide/lifecycle' },
           { text: 'Actions', link: '/guide/actions' },
@@ -48,8 +50,9 @@ export default defineConfig({
         items: [
           { text: 'Configuration reference', link: '/reference/configuration' },
           { text: 'Annotated kranz.yaml', link: '/reference/kranz-yaml' },
-          { text: 'CLI', link: '/reference/cli' },
-          { text: 'Controls', link: '/reference/controls' },
+          { text: 'CLI command reference', link: '/reference/cli' },
+          { text: 'MCP server reference', link: '/reference/mcp' },
+          { text: 'Keyboard shortcuts', link: '/reference/controls' },
           { text: 'Process Compose', link: '/reference/process-compose' }
         ]
       },
@@ -64,7 +67,8 @@ export default defineConfig({
           { text: 'Prerequisites', link: '/examples/prerequisites' },
           { text: 'Process Compose', link: '/examples/process-compose' },
           { text: 'Full dependency graph', link: '/examples/full-stack' },
-          { text: 'Runtime ports', link: '/examples/runtime-ports' }
+          { text: 'Runtime ports', link: '/examples/runtime-ports' },
+          { text: 'MCP shared runtime', link: '/examples/mcp-shared-runtime' }
         ]
       }
     ],

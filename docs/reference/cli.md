@@ -159,6 +159,25 @@ session, not the ordinary way to stop a project.
 Leaving an attached TUI does not stop a background runtime. An external `down`
 closes attached clients cleanly.
 
+`ps` reports the lifecycle owner in its `MODE` column. The possible owner modes
+are `tui`, `foreground`, `background`, and `mcp`. Different runtime rows can use
+different modes at the same time, and the same project can have multiple rows
+when each was given a distinct runtime name with `-p`. One session ID has only
+one owner mode: an attached TUI, CLI command, or additional MCP bridge remains
+a client of that session and does not add another mode or another `ps` row.
+
+### Serving a runtime to a coding agent
+
+```bash
+kranz mcp                           # stdio MCP server on the selected runtime
+```
+
+`mcp` speaks the Model Context Protocol on stdin and stdout, so stdout carries
+JSON-RPC framing and nothing else; `--output` is refused and diagnostics go to
+stderr. It attaches to the runtime the ordinary selection rules pick, and only
+creates one of its own when that project has no runtime at all. See the [MCP
+reference](./mcp.md).
+
 ### Logs
 
 ```bash
@@ -186,7 +205,8 @@ tell interleaved streams apart, which reading one stream back does not need.
 `logs clear` narrows the same way `logs` does, and an unqualified clear needs
 `--force`, because it is the one shape that cannot be narrowed afterwards.
 
-An action keeps one buffer per execution, so its logs are addressed by run:
+Every start of a service and every execution of an action is a numbered run,
+so a single buffer stays addressable after the thing that filled it restarted:
 
 ```bash
 kranz logs analytics/stats                # the latest run, whole
@@ -194,7 +214,12 @@ kranz logs analytics/stats --run 7        # run number 7
 kranz logs analytics/stats --run -1       # the latest run
 kranz logs analytics/stats --run -2       # the run before it
 kranz logs analytics/stats --runs 3       # the last three runs
+kranz logs api --run -1                   # only the newest start of a service
 ```
+
+A service reads as one continuous stream, so its lines are labelled with a run
+number only when the window you asked for spans more than one start. An action
+reads as one invocation among several and always carries its number.
 
 A positive `--run` is the absolute run number Kranz assigned. A negative one is
 an offset from the newest run still buffered, so `-1` keeps meaning "the latest"

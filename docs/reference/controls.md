@@ -1,8 +1,9 @@
-# Controls
+# Keyboard shortcuts
 
-Mouse interaction is available for panels, rows, checkboxes, modal actions,
-search controls, and the theme picker. Keyboard shortcuts remain the primary
-workflow.
+This is the complete keyboard shortcut reference for the Kranz terminal UI.
+Press `?` inside Kranz to open the same context-aware help without leaving the
+terminal. Mouse interaction is also available for panels, rows, checkboxes,
+modal actions, search controls, and the theme picker.
 
 ## Navigation
 

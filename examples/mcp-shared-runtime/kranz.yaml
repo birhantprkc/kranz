@@ -1,5 +1,11 @@
 project: mcp-shared-runtime
 
+ui:
+  theme: tokyo-night
+  accent: "#7AA2F7"
+  background: theme
+  color_mode: dark
+
 defaults:
   dir: .
   shell: /bin/sh

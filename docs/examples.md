@@ -16,6 +16,7 @@ Start from the repository root after building or installing Kranz.
   <a class="example-card" href="./examples/process-compose"><strong>Process Compose</strong>Open an existing compatible configuration directly.</a>
   <a class="example-card" href="./examples/full-stack"><strong>Full dependency graph</strong>Two APIs, a gateway, a worker, health gates, and recovery.</a>
   <a class="example-card" href="./examples/runtime-ports"><strong>Runtime ports</strong>See how Kranz discovers listeners from processes and children.</a>
+  <a class="example-card" href="./examples/mcp-shared-runtime"><strong>MCP shared runtime</strong>Prove that CLI and MCP operate one live session and one action-run identity.</a>
 </div>
 
 ## Which example should I choose?
@@ -30,6 +31,7 @@ Start from the repository root after building or installing Kranz.
 | Whether your existing Process Compose file works | [Process Compose](./examples/process-compose) |
 | Dependency fan-out, fan-in, health, and recovery | [Full stack](./examples/full-stack) |
 | Declared, detected, stale, and dynamic ports | [Runtime ports](./examples/runtime-ports) |
+| A coding agent joining the runtime you already use | [MCP shared runtime](./examples/mcp-shared-runtime) |
 
 ::: tip Safe by construction
 The lifecycle playground simulates external resources with ignored marker files.

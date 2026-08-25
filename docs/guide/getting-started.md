@@ -75,6 +75,8 @@ also asks for confirmation and stops them.
 - Follow the full [Procfile example](../examples/procfile) to add `.env` values.
 - Use [native YAML](../examples/native) for dependencies and readiness.
 - Read [core concepts](./core-concepts) before modeling a real project.
+- Learn the [terminal interface](./tui), including its panels, common workflow,
+  and complete keyboard reference.
 
 ## Choosing a configuration format
 

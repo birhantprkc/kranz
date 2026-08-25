@@ -28,6 +28,23 @@ Compose when containers remain the right home for infrastructure.
   <img src="docs/assets/kranz-demo.gif" alt="Kranz terminal interface">
 </p>
 
+## Coding agents join your live session
+
+Kranz MCP gives a coding agent the same services, actions, readiness, ports,
+and bounded logs visible in the TUI. It attaches to the existing runtime instead
+of starting a second development stack.
+
+- **One runtime** — TUI, CLI, and MCP use the same supervisor.
+- **One view of the project** — the same selectors, action runs, and logs.
+- **Clear ownership** — disconnecting an attached agent does not stop the stack.
+
+Register the existing binary as a stdio MCP server running
+`kranz mcp -C /path/to/project`.
+
+See [Coding agents and one live runtime](https://kranz-org.github.io/kranz/guide/mcp)
+for ownership behavior and examples, and the [MCP reference](https://kranz-org.github.io/kranz/reference/mcp)
+for the exact resource, tool, cursor, confirmation, and error contracts.
+
 ## Quick start
 
 Install on macOS or Linux:
@@ -93,12 +110,15 @@ for every command, option, output contract, and exit code.
 ## Documentation
 
 - [Getting started](https://kranz-org.github.io/kranz/guide/getting-started)
+- [Using the terminal interface](https://kranz-org.github.io/kranz/guide/tui)
 - [Working from the command line](https://kranz-org.github.io/kranz/guide/cli-workflow)
 - [Configuration and lifecycle](https://kranz-org.github.io/kranz/guide/configuration)
 - [Configuration reference](https://kranz-org.github.io/kranz/reference/configuration)
 - [Annotated kranz.yaml](https://kranz-org.github.io/kranz/reference/kranz-yaml)
 - [CLI reference](https://kranz-org.github.io/kranz/reference/cli)
-- [Keyboard controls](https://kranz-org.github.io/kranz/reference/controls)
+- [MCP setup](https://kranz-org.github.io/kranz/guide/mcp)
+- [MCP server reference](https://kranz-org.github.io/kranz/reference/mcp)
+- [Keyboard shortcuts](https://kranz-org.github.io/kranz/reference/controls)
 - [Troubleshooting](https://kranz-org.github.io/kranz/guide/troubleshooting)
 - [Runnable examples](examples/)
 

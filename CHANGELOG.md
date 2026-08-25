@@ -4,6 +4,70 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+### Added
+
+- A foreground stdio MCP adapter in the existing `kranz` binary. Coding agents
+  attach to the same registry/IPC runtime as the TUI and CLI, with owner
+  fallback only when no runtime exists.
+- Versioned MCP resources and an explicit safe tool allow-list for services,
+  plans, ports, bounded normalized logs, waits, actions, and lifecycle changes.
+- Shared application contracts for selectors, plans, confirmation tokens,
+  action-run result history, config redaction, primary service actions, and log
+  queries used by both CLI and MCP.
+- A runtime journal, and the `changes` tool that reads it. The difference
+  between two `status` results is not what happened: a service that crashed and
+  was restarted looks identical to one that never moved. `changes` returns
+  service transitions, detected-port changes, action runs, and configuration
+  reloads after a cursor, and reports `truncated` when its bounded history has
+  already dropped part of the answer. `wait` hands back the same cursor, so
+  "what happened while I waited" is one follow-up call.
+- Structured causes on service state. A service that stayed stopped because a
+  prerequisite failed now says so, naming the action and the run of it that
+  failed, and the same applies to a port conflict, a failed dependency, a start
+  that could not exec, and an unsuccessful exit. Reading the causal chain out of
+  log text was the part an agent could get wrong.
+- Probe detail on health: the target each readiness and liveness check
+  contacted and the error it last returned, through the new `health` tool with
+  its recorded history.
+- Run numbers for services, not only actions. Every start opens a numbered run
+  and the lines it produces carry it, so `kranz logs api --run -1` reads the
+  newest start alone instead of a time range guessed around a restart. A service
+  line is labelled with its run only when the window spans more than one start.
+- `kranz://graph` and the `graph` tool: nodes for services, action groups, and
+  actions, with `dependency`, `prerequisite`, and `owns` edges and live service
+  state folded in.
+- MCP reaches the rest of the service, action, and group surface it was missing:
+  `reload` after an agent edits a configuration, `doctor` for the same preflight
+  checks `kranz doctor` runs, `port_inspect` for who holds any local port, and
+  loader diagnostics in `kranz://config`.
+- Every MCP tool declares an `outputSchema`, and `resources/templates/list`
+  answers with an empty list rather than a method-not-found error.
+
+### Fixed
+
+- `kranz down` now completes an MCP-owned runtime instead of only stopping its
+  managed application state. It removes the old registry session before
+  disconnecting attached MCP bridges, closes every supervisor client without a
+  shutdown deadlock, and waits for disappearance before printing `Stopped`, so
+  an MCP client's immediate restart can initialize against a fresh owner.
+- An MCP tool that panics now fails that one call. The MCP process may also be
+  the supervisor, where an unrecovered panic took every managed service down
+  with it; a service the runtime declines to answer for is reported as
+  `service_unavailable` instead of dereferencing nil.
+- A resolved plan with no targets no longer reports one empty wave, which a
+  reader counting waves took for work to do.
+- A request cancellation whose id is spelled differently than the request spelled
+  it (`1` against `1.0`) now cancels that request.
+- `kranz doctor` and the MCP preflight run one implementation of the checks
+  rather than two that could drift apart.
+- A `wait` that times out says so. The runtime now owns the wait deadline; the
+  delivery adapter's own request deadline expired first and reported a timeout
+  as a cancellation, which named neither what it was waiting for nor why.
+- A prerequisite failure keeps its identity across the runtime socket. An
+  attached client received "operation_failed" and a sentence to parse, while
+  the owner process saw the structured failure; both now get
+  `prerequisite_failed` with the service, the gating action, and its run.
+
 ## [0.8.2] - 2026-08-24
 
 ### Added
