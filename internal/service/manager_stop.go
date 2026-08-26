@@ -57,6 +57,11 @@ func (m *Manager) StopService(name string) error {
 		svc.AppendLog(fmt.Sprintf("[Kranz] Failed to stop %s: %v", name, stopErr))
 	}
 
+	exitCode := 0
+	if pm != nil {
+		exitCode = pm.ExitCode()
+	}
+	svc.RecordExit(exitCode, stopErr)
 	svc.SetPID(0)
 	svc.SetStatus(config.StatusStopped)
 	svc.AppendLog("[Kranz] Stopped")
@@ -89,6 +94,7 @@ func (m *Manager) stopDetachedService(svc *Service) error {
 		m.wakeStatusMonitor(svc.Name)
 		return fmt.Errorf("stop detached service %q: %w", svc.Name, err)
 	}
+	svc.RecordExit(result.ExitCode, nil)
 	svc.SetPID(0)
 	svc.SetStatus(config.StatusStopped)
 	m.wakeStatusMonitor(svc.Name)
@@ -122,11 +128,6 @@ func (m *Manager) appendLifecycleResult(svc *Service, operation string, result A
 			svc.AppendLog(line)
 		}
 	}
-	var resultErr error
-	if result.Error != "" {
-		resultErr = errors.New(result.Error)
-	}
-	svc.RecordExit(result.ExitCode, resultErr)
 	svc.AppendLog(fmt.Sprintf("[Kranz] Lifecycle %s %s · exit %d", operation, result.Status.String(), result.ExitCode))
 }
 

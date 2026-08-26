@@ -107,6 +107,7 @@ func (m *Manager) startService(ctx context.Context, name string, recovery bool) 
 	pid, err := pm.Start(context.Background(), start.Command, start.Dir, start.Env, start.Shell)
 	if err != nil {
 		svc.SetDesiredRunning(false)
+		svc.RecordExit(-1, err)
 		svc.SetCause(&config.StateCause{Type: "start_failed", Message: err.Error()})
 		svc.SetStatus(config.StatusStopped)
 		svc.AppendLog("[Kranz] Start failed: " + err.Error())
@@ -173,6 +174,11 @@ func (m *Manager) startDetachedService(ctx context.Context, svc *Service) error 
 	result, err := m.actions.RunDefinition(ctx, id, *start)
 	m.appendLifecycleResult(svc, "start", result)
 	if err != nil {
+		var resultErr error
+		if result.Error != "" {
+			resultErr = errors.New(result.Error)
+		}
+		svc.RecordExit(result.ExitCode, resultErr)
 		svc.SetDesiredRunning(false)
 		// A detached start can mutate external state before failing, timing out,
 		// or being canceled. Never claim it is stopped without observing that.
