@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,7 +92,7 @@ func DialContextWithIdentity(ctx context.Context, socketPath, clientVersion stri
 	}
 
 	helloBody, err := json.Marshal(helloRequest{ProtocolMin: protocolVersion, ProtocolMax: protocolVersion,
-		ClientVersion: clientVersion, Surface: identity.Surface, ClientLabel: identity.Label})
+		ClientVersion: clientVersion, Surface: identity.Surface, ClientLabel: identity.Label, ClientPID: os.Getpid()})
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -268,6 +269,15 @@ func (c *Client) Reload(force bool) (app.ReloadResult, error) {
 
 func (c *Client) AcknowledgeExternalWrite() {
 	_, _ = call[emptyRequest, emptyResponse](c, context.Background(), methodAcknowledgeExternalWrite, emptyRequest{})
+}
+
+// Clients lists the connections the runtime is currently serving.
+func (c *Client) Clients() ([]ClientInfo, error) {
+	resp, err := call[emptyRequest, clientsResponse](c, context.Background(), methodClients, emptyRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Clients, nil
 }
 
 func (c *Client) Services() []*app.ServiceSnapshot {

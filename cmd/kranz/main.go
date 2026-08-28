@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -215,6 +216,12 @@ func execute(args []string, stdout, stderr io.Writer) int {
 		}
 		return runPS(invocation.Globals, stdout, stderr)
 	}
+	if invocation.Command() == "clients" {
+		if len(invocation.Args) != 0 {
+			return kranzcli.WriteError(stdout, stderr, invocation.Globals.Output, &kranzcli.Error{Code: "invalid_arguments", Message: "clients does not accept arguments", ExitCode: kranzcli.ExitUsage})
+		}
+		return runClients(invocation.Globals, stdout, stderr)
+	}
 	if invocation.Command() == "up" {
 		if err := runUp(invocation.Globals, invocation.Args, stdout); err != nil {
 			var requested requestedExitError
@@ -321,7 +328,10 @@ func runPS(options kranzcli.GlobalOptions, stdout, stderr io.Writer) int {
 		return 0
 	}
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tNAME\tPROJECT\tMODE\tSERVICES\tSTATE\tUPTIME")
+	// MODE is gone: with the MCP adapter no longer a registry entry, the only
+	// values left describe how a runtime was launched, not what it is. CLIENTS
+	// answers the question the row could not: who is working in this project.
+	_, _ = fmt.Fprintln(w, "ID\tNAME\tPROJECT\tSERVICES\tCLIENTS\tSTATE\tUPTIME")
 	for _, record := range records {
 		// A bare total says nothing about whether the project is actually up.
 		// An unreachable runtime reports "-" rather than a count it cannot know.
@@ -329,11 +339,15 @@ func runPS(options kranzcli.GlobalOptions, stdout, stderr io.Writer) int {
 		if record.Services != nil && record.Running != nil {
 			services = fmt.Sprintf("%d/%d", *record.Running, *record.Services)
 		}
+		clients := "-"
+		if record.Clients != nil {
+			clients = strconv.Itoa(*record.Clients)
+		}
 		id := record.ID
 		if len(id) > 8 {
 			id = id[:8]
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, record.Name, record.Project, record.Mode, services, record.State, shortDuration(time.Since(record.StartedAt)))
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, record.Name, record.Project, services, clients, record.State, shortDuration(time.Since(record.StartedAt)))
 	}
 	if err := w.Flush(); err != nil {
 		return kranzcli.WriteError(stdout, stderr, options.Output, err)

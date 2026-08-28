@@ -119,6 +119,7 @@ func DefaultTree() *Command {
 		}},
 		{Name: "doctor", Summary: "run project preflight checks"},
 		{Name: "ps", Summary: "list active project runtimes"},
+		{Name: "clients", Summary: "list clients attached to project runtimes"},
 		{Name: "list", Summary: "list services, actions, or tags", Usage: "kranz list [services|actions|tags]"},
 		{Name: "info", Summary: "show project or service details", Usage: "kranz info [SERVICE]"},
 		{Name: "status", Summary: "show runtime status", Usage: "kranz status [SELECTOR ...]"},
@@ -148,8 +149,8 @@ func DefaultTree() *Command {
 			{Flags: "--force", Summary: "discard a runtime that no longer answers its socket"},
 		}},
 		{Name: "attach", Summary: "open the TUI for an active runtime"},
-		{Name: "mcp", Summary: "serve the selected runtime over MCP stdio", Usage: "kranz mcp [--attach-only]", Options: []Option{
-			{Flags: "--attach-only", Summary: "fail instead of creating a missing runtime; recommended for agent clients"},
+		{Name: "mcp", Summary: "serve project runtimes over MCP stdio; global -C/-p pin it to one", Usage: "kranz mcp", Options: []Option{
+			{Flags: "--attach-only", Summary: "accepted and ignored; MCP no longer creates a runtime on connect"},
 		}},
 		{Name: "logs", Summary: "show and clear logs", Default: "show", Children: []*Command{
 			{Name: "show", Summary: "show service and action logs", Usage: "kranz logs [SELECTOR ...] [--tail N | --all] [--since D]\n  [--run N | --runs N] [--source S] [--with-actions]\n  [--plain | --no-timestamps | --no-labels] [--follow]", Options: []Option{

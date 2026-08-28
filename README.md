@@ -44,18 +44,17 @@ changes immediately in the open TUI; none of these views starts a second stack.
 
 Kranz MCP gives a coding agent the same services, actions, readiness, ports,
 bounded logs, and numbered run history visible in the TUI. It attaches to the
-existing runtime instead of starting a second development stack.
+existing runtimes instead of starting a second development stack.
 
 - **One runtime** — TUI, CLI, and MCP use the same supervisor.
 - **One view of the project** — the same selectors, action runs, and logs.
 - **Clear ownership** — disconnecting an attached agent does not stop the stack.
 
-Register the existing binary as a stdio MCP server running
-`kranz mcp -C /path/to/project --attach-only`. The explicit attach policy keeps
-an agent from silently creating an empty runtime when the intended TUI session
-is not running.
+Register the existing binary once, globally, as a stdio MCP server running
+`kranz mcp`. It takes no project: the runtime is chosen per call, so one
+registration covers every project, and connecting creates nothing.
 
-See [Coding agents and one live runtime](https://kranz-org.github.io/kranz/guide/mcp)
+See [Coding agents and your live runtimes](https://kranz-org.github.io/kranz/guide/mcp)
 for ownership behavior and examples, and the [MCP reference](https://kranz-org.github.io/kranz/reference/mcp)
 for the exact resource, tool, cursor, confirmation, and error contracts.
 

@@ -1,8 +1,13 @@
-# Coding agents and one live runtime
+# Coding agents and your live runtimes
 
-Kranz MCP lets a coding agent join the local runtime already open in your TUI.
+Kranz MCP lets a coding agent join the local runtimes already open in your TUI.
 The agent sees the same services, actions, readiness, ports, action-run numbers,
 and bounded logs. It does not start a second development stack.
+
+One registration covers every project. `kranz mcp` takes no project argument,
+creates nothing when a client connects, and picks the runtime per call — so
+"read the logs of the service I am looking at" works in the project you are in,
+and in the one next door.
 
 TUI, CLI, and MCP are three views of the same application API:
 
@@ -37,17 +42,17 @@ kranz version
 kranz mcp --help
 ```
 
-The bridge uses foreground stdio. Register it in an MCP client with an absolute
-project directory and `--attach-only`, then let the client start and supervise
-the command. This makes a missing TUI/background runtime a loud error rather
-than creating an empty project that looks successfully connected.
+The bridge uses foreground stdio. Register it once, with no arguments, and let
+the client start and supervise the command. It starts even in a directory with
+no Kranz configuration, and it never creates a runtime just because a client
+connected.
 
 ## Register the server
 
 ### Codex
 
 ```bash
-codex mcp add kranz -- kranz mcp -C /path/to/project --attach-only
+codex mcp add kranz -- kranz mcp
 codex mcp list
 ```
 
@@ -56,7 +61,7 @@ Codex also supports a project-scoped `.codex/config.toml`:
 ```toml
 [mcp_servers.kranz]
 command = "kranz"
-args = ["mcp", "-C", "/path/to/project", "--attach-only"]
+args = ["mcp"]
 ```
 
 The Codex CLI, IDE extension, and ChatGPT desktop app on the same host share
@@ -66,10 +71,10 @@ for client-side configuration and approval options.
 
 ### Claude Code
 
-Run this from the project to keep the registration local to that checkout:
+One user-scoped registration covers every project:
 
 ```bash
-claude mcp add --scope local kranz -- kranz mcp -C /path/to/project --attach-only
+claude mcp add --scope user kranz -- kranz mcp
 claude mcp get kranz
 ```
 
@@ -81,7 +86,7 @@ claude mcp get kranz
   "mcp": {
     "kranz": {
       "type": "local",
-      "command": ["kranz", "mcp", "-C", "/path/to/project", "--attach-only"],
+      "command": ["kranz", "mcp"],
       "enabled": true
     }
   }
@@ -98,10 +103,40 @@ Open the configured client in that project and ask:
 > Which Kranz services are running, and which are not ready?
 
 The client should discover Kranz resources and tools without you naming
-protocol calls. While the connection is active, `kranz ps` shows the selected
-runtime. If the TUI already owned it, the MCP session reports
-`connection_mode: attached`; closing the client leaves the TUI and services
-running.
+protocol calls. The MCP process itself never appears in `kranz ps` — it
+supervises nothing — but `kranz clients` shows it attached to whichever runtime
+it just answered from. Closing the client leaves the TUI and services running.
+
+## How a call finds its runtime
+
+Every tool except `runtimes`, `up`, and `down` takes an optional `runtime`
+argument. The address is resolved in this order, first match wins:
+
+1. the `runtime` argument, naming a project by name or id;
+2. the `-C`/`-p` pin, if the server was registered with one;
+3. the directory the client started the server in, looked up in the registry
+   the same way `kranz logs` looks it up without `-p`;
+4. otherwise `runtime_required`, listing every running runtime as a candidate.
+
+Nothing in that chain creates a runtime. Step 3 is a lookup, which is why the
+directory is safe to use here: an agent registered in one project reaches that
+project by default, and reaches any other by naming it.
+
+The working directory is fixed when the client spawns the server, so it does
+not follow you as the conversation moves to another project. That lands on
+`runtime_required`, and its candidates can be passed straight back:
+
+```json
+{"code": "runtime_required",
+ "message": "no runtime was addressed and this MCP server has no project of its own",
+ "details": {"candidates": [
+   {"runtime": "myclass", "id": "98784c10", "directory": "/Users/you/Dev/MyClass"},
+   {"runtime": "harness", "id": "10a2a490", "directory": "/Users/you/Dev/Harness"}]}}
+```
+
+The same holds one level down: if `im-core` is missing here but exists in
+`myclass`, `selector_not_found` carries `available_in`, and repeating the call
+with that `runtime` succeeds.
 
 ## Server, project, and runtime names
 
@@ -113,27 +148,35 @@ The same setup exposes three related names, each with a different job:
 - `harness` in `kranz ps` is the runtime name. It comes from `runtime.name`
   when that field is set, otherwise from a stable lower-case slug of `project`.
 
-The `mcp` value in the `MODE` column is not another project name. It says that
-the process which owns this runtime is an MCP bridge. Another user's runtime is
-named from that user's selected project configuration, not from their account
-name and not automatically `kranz`.
+Runtimes and the clients attached to them are listed separately: `kranz ps`
+answers "what is running", `kranz clients` answers "who is working in it". An
+MCP server is a client, never a row in `ps`.
 
-Each MCP connection has one fixed runtime binding. Use the `runtimes` tool (or
-`kranz://runtimes`) before interpreting an empty status or a missing selector:
-it lists other sessions and marks the current one. A cross-runtime
-`selector_not_found` also reports `available_in` when, for example, `im-core`
-exists in `myclass` while this connection is bound to `harness`.
+## Pinning a connection to one project
 
-Global project selection is unchanged. `kranz -C DIR mcp`, `kranz -f FILE mcp`,
-and `kranz -p NAME_OR_ID mcp` use the same config discovery and runtime registry
-as the CLI. Global flags can appear before or after `mcp`.
-Run `kranz mcp --help` for the selected build's project-selection options.
+`-C DIR`, `-f FILE`, and `-p NAME|ID` pin the server to one project. A pinned
+connection resolves everything to that runtime and refuses any other address
+with `runtime_pinned` — useful when a client should be unable to reach beyond
+one checkout. Existing registrations that pass these flags keep working
+unchanged; they are now a choice rather than a requirement.
 
-`-C DIR` discovers the project at that directory; without `--attach-only` it
-may create and own the runtime when none exists. `-p NAME|ID` binds by runtime
-identity and never creates one. For an agent that moves between projects, use
-separate named registrations pinned with `-p`, rather than relying on the
-client's startup working directory to follow the conversation.
+`--attach-only` is accepted and ignored. It disabled an owner fallback that no
+longer exists.
+
+## Starting a project the agent was asked to start
+
+An agent can bring up a project that is not running, and only when asked:
+
+- `up` starts the runtime and **no services**. It requires `confirm: true`,
+  because the runtime it creates is a background process that outlives the
+  session and stays in `kranz ps` until someone stops it.
+- Every other tool answers `runtime_not_found` for a project that is not
+  running, and names `up` in the hint. Asking for logs never starts anything.
+- `down` reaches only a runtime this MCP session started with `up`. A project
+  you are working in answers `not_owned`.
+
+Starting services stays a separate, deliberate `start` call against a resolved
+plan.
 
 Try prompts that describe an outcome rather than protocol calls:
 
@@ -143,28 +186,16 @@ Try prompts that describe an outcome rather than protocol calls:
 - What changed in the environment since I edited the handler?
 - I added a service to kranz.yaml — reload and start it.
 
-## Attach-first ownership
+## Several agents, several runtimes
 
-When a compatible runtime exists, MCP reports `connection_mode: attached`.
-Closing that MCP process closes only its IPC connection: the TUI and services
-keep running. If no runtime exists for the configured project, MCP creates one
-foreground owner runtime; closing that owner performs normal managed-process
-cleanup. Ambiguous, incompatible, stale, or unreachable registry entries fail
-instead of creating a competing supervisor.
+One MCP process serves any number of runtimes at once, and any number of agents
+can attach to one runtime — that is what `kranz attach` has always allowed. Each
+answer names the runtime that produced it in `session`, so a result can never be
+misread as coming from the project you happened to be thinking about.
 
-An owner fallback is explicit in `kranz://session` as
-`owner_reason: created_missing_runtime`, together with a hint when other
-runtimes were already live. `--attach-only` disables that fallback and prints
-the available runtimes instead.
-
-`kranz down` against an MCP-owned runtime waits until the old session has left
-the registry before reporting `Stopped`. It also disconnects every attached MCP
-bridge cleanly. An MCP client may supervise its configured child process and
-start a new bridge after that intentional EOF. If it does, `kranz ps` shows a
-new session ID: that is the client applying its desired configuration, not
-Kranz resurrecting the stopped session. Disable or remove the MCP connection in
-that client when the project must stay down. Seeing the same session ID after a
-successful `down` would be a lifecycle failure.
+Closing an MCP client closes its connections and nothing else. The runtimes it
+was talking to keep running, including one it started itself with `up`: that
+runtime is owned by its own background process, exactly like `kranz up -d`.
 
 The path is the same as the CLI:
 

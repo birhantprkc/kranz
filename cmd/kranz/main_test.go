@@ -508,7 +508,7 @@ func TestMCPHelpAcceptsGlobalOptionsBeforeAndAfterCommand(t *testing.T) {
 			t.Fatalf("execute(%q) exit = %d, stderr = %q", args, code, stderr.String())
 		}
 		for _, expected := range []string{
-			"kranz mcp — serve the selected runtime over MCP stdio",
+			"kranz mcp — serve project runtimes over MCP stdio; global -C/-p pin it to one",
 			"Usage:\n  kranz mcp",
 			"-C, --directory DIR",
 			"-p, --project VALUE",

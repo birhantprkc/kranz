@@ -56,6 +56,9 @@ type SessionRecord struct {
 	// caller can tell "no services" from "state unknown".
 	Services *int `json:"services"`
 	Running  *int `json:"running"`
+	// Clients counts the connections the runtime is serving, nil when it could
+	// not be reached. The listing probe is itself one of them and is excluded.
+	Clients *int `json:"clients"`
 }
 
 type Registry struct {
@@ -372,6 +375,12 @@ func (r *Registry) list(ctx context.Context, clientVersion string, includeStale 
 			}
 			record.Services, record.Running = &count, &running
 			record.State = SessionRunning
+			if connected, clientsErr := client.Clients(); clientsErr == nil {
+				// This probe holds one of those connections; reporting it would
+				// tell every reader a runtime nobody uses has one client.
+				others := max(0, len(connected)-1)
+				record.Clients = &others
+			}
 			_ = client.Close()
 		} else {
 			var mismatch *VersionMismatchError

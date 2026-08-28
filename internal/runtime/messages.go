@@ -14,6 +14,7 @@ import (
 
 const (
 	methodHello                           = "hello"
+	methodClients                         = "clients"
 	methodProject                         = "project"
 	methodConfig                          = "config"
 	methodRedactedConfig                  = "redactedConfig"
@@ -70,6 +71,22 @@ const (
 	methodAppendLogForTest                = "appendLogForTest"
 	methodAppendLogAtForTest              = "appendLogAtForTest"
 )
+
+// ClientInfo describes one connection a runtime is serving. Several agents,
+// a TUI, and a CLI can share one runtime, and after v0.11.0 an MCP process is
+// no longer a registry entry of its own, so this is the only place a
+// connected client is visible.
+type ClientInfo struct {
+	Surface     string    `json:"surface"`
+	Label       string    `json:"label"`
+	PID         int       `json:"pid"`
+	Version     string    `json:"version"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+type clientsResponse struct {
+	Clients []ClientInfo `json:"clients"`
+}
 
 type emptyRequest struct{}
 type emptyResponse struct{}

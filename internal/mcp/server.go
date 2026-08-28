@@ -16,19 +16,23 @@ import (
 
 const maxMessageSize = 16 * 1024 * 1024
 
-type toolHandler func(context.Context, json.RawMessage) ResultEnvelope
-type resourceHandler func(context.Context) ResultEnvelope
+// A scoped handler is a method expression on *scope, so a tool can only be
+// installed once a way to resolve a runtime for it exists.
+type toolHandler func(*scope, context.Context, json.RawMessage) ResultEnvelope
+type globalToolHandler func(*Server, context.Context, json.RawMessage) ResultEnvelope
+type resourceHandler func(*scope, context.Context) ResultEnvelope
+type globalResourceHandler func(*Server, context.Context) ResultEnvelope
 
 type pendingRequest struct {
 	cancel context.CancelFunc
 }
 
 type Server struct {
-	api     app.API
-	session SessionIdentity
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
+	resolver     *Resolver
+	kranzVersion string
+	stdin        io.Reader
+	stdout       io.Writer
+	stderr       io.Writer
 
 	writeMu     sync.Mutex
 	requestWG   sync.WaitGroup
@@ -45,11 +49,19 @@ type Server struct {
 	selectorMatchOverride func(context.Context, string) ([]RuntimeSelectorMatch, error)
 }
 
-func NewServer(api app.API, session SessionIdentity, stdin io.Reader, stdout, stderr io.Writer) *Server {
-	server := &Server{api: api, session: session, stdin: stdin, stdout: stdout, stderr: stderr, pending: map[string]*pendingRequest{}}
+// NewServer serves any number of runtimes through one resolver. The process
+// itself is a client of runtimes and owns none of them.
+func NewServer(resolver *Resolver, kranzVersion string, stdin io.Reader, stdout, stderr io.Writer) *Server {
+	server := &Server{resolver: resolver, kranzVersion: kranzVersion, stdin: stdin, stdout: stdout, stderr: stderr, pending: map[string]*pendingRequest{}}
 	server.installResources()
 	server.installTools()
 	return server
+}
+
+// NewServerForRuntime serves exactly one already-connected runtime, which is
+// what a pinned launch and an in-process caller both have.
+func NewServerForRuntime(api app.API, session SessionIdentity, stdin io.Reader, stdout, stderr io.Writer) *Server {
+	return NewServer(StaticResolver(api, session), session.KranzVersion, stdin, stdout, stderr)
 }
 
 // Serve runs newline-delimited UTF-8 JSON-RPC. stdout is touched only by
@@ -175,10 +187,7 @@ func (s *Server) handleRequest(parent context.Context, message rpcMessage) {
 		case "resources/list":
 			result = map[string]any{"resources": s.listResources()}
 		case "resources/templates/list":
-			// Kranz publishes fixed resource URIs. Answering with an empty
-			// list is the honest response; a method-not-found error only makes
-			// clients that probe on connect log a failure they cannot act on.
-			result = map[string]any{"resourceTemplates": []any{}}
+			result = map[string]any{"resourceTemplates": s.resourceTemplates()}
 		case "resources/read":
 			result, protocolErr = s.readResource(ctx, message.Params)
 		default:
@@ -203,8 +212,8 @@ func (s *Server) initialize(raw json.RawMessage) (any, *rpcError) {
 	return map[string]any{
 		"protocolVersion": negotiated,
 		"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}, "resources": map[string]any{"subscribe": false, "listChanged": false}},
-		"serverInfo":      map[string]any{"name": "kranz", "title": "Kranz project runtime", "version": s.session.KranzVersion},
-		"instructions":    "Inspect and operate the selected live Kranz runtime. Use explicit start/stop operations and honor confirmation_required results.",
+		"serverInfo":      map[string]any{"name": "kranz", "title": "Kranz project runtimes", "version": s.kranzVersion},
+		"instructions":    s.instructions(),
 	}, nil
 }
 
@@ -223,7 +232,10 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 	if len(params.Arguments) == 0 {
 		params.Arguments = json.RawMessage("{}")
 	}
-	envelope := definition.handler(ctx, params.Arguments)
+	envelope, protocolErr := s.invokeTool(ctx, definition, params.Arguments)
+	if protocolErr != nil {
+		return nil, protocolErr
+	}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
 		return nil, &rpcError{Code: -32603, Message: "encode tool result", Data: err.Error()}
@@ -238,11 +250,18 @@ func (s *Server) readResource(ctx context.Context, raw json.RawMessage) (any, *r
 	if err := json.Unmarshal(raw, &params); err != nil || params.URI == "" {
 		return nil, &rpcError{Code: -32602, Message: "Invalid resource parameters"}
 	}
-	definition, ok := s.resources[params.URI]
+	uri, requested := params.URI, ""
+	if runtimeRef, short, scoped := runtimeScopedURI(uri); scoped {
+		uri, requested = short, runtimeRef
+	}
+	definition, ok := s.resources[uri]
 	if !ok {
 		return nil, &rpcError{Code: -32002, Message: "Resource not found", Data: map[string]any{"uri": params.URI}}
 	}
-	envelope := definition.handler(ctx)
+	if requested != "" && definition.scoped == nil {
+		return nil, &rpcError{Code: -32002, Message: "Resource is not runtime-scoped", Data: map[string]any{"uri": params.URI}}
+	}
+	envelope := s.readResourceDefinition(ctx, definition, requested)
 	payload, err := json.Marshal(envelope)
 	if err != nil {
 		return nil, &rpcError{Code: -32603, Message: "encode resource", Data: err.Error()}
@@ -312,4 +331,66 @@ func (s *Server) cancelAll() {
 	for _, request := range pending {
 		request.cancel()
 	}
+}
+
+// invokeTool resolves the runtime a scoped call names before the handler runs.
+// The runtime argument is consumed here rather than by each tool, so no tool
+// has to know how addressing works and none can quietly ignore it.
+func (s *Server) invokeTool(ctx context.Context, definition toolDefinition, arguments json.RawMessage) (ResultEnvelope, *rpcError) {
+	if definition.global != nil {
+		return definition.global(s, ctx, arguments), nil
+	}
+	requested, rest, err := splitRuntimeArgument(arguments)
+	if err != nil {
+		return s.globalArgError(err), nil
+	}
+	resolved, causal := s.resolver.Resolve(ctx, requested)
+	if causal != nil {
+		return s.globalError(causal), nil
+	}
+	return definition.scoped(s.scopeFor(resolved), ctx, rest), nil
+}
+
+func (s *Server) readResourceDefinition(ctx context.Context, definition resourceDefinition, requested string) ResultEnvelope {
+	if definition.global != nil {
+		return definition.global(s, ctx)
+	}
+	resolved, causal := s.resolver.Resolve(ctx, requested)
+	if causal != nil {
+		return s.globalError(causal)
+	}
+	return definition.scoped(s.scopeFor(resolved), ctx)
+}
+
+// splitRuntimeArgument lifts runtime out of the arguments object. Tool
+// argument decoding rejects unknown fields on purpose, so the address has to
+// be removed rather than left for a handler that does not declare it.
+func splitRuntimeArgument(arguments json.RawMessage) (string, json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(arguments, &fields); err != nil {
+		return "", nil, fmt.Errorf("arguments must be a JSON object: %w", err)
+	}
+	raw, ok := fields["runtime"]
+	if !ok {
+		return "", arguments, nil
+	}
+	var requested string
+	if err := json.Unmarshal(raw, &requested); err != nil {
+		return "", nil, fmt.Errorf("runtime must be a string: %w", err)
+	}
+	delete(fields, "runtime")
+	rest, err := json.Marshal(fields)
+	if err != nil {
+		return "", nil, err
+	}
+	return requested, rest, nil
+}
+
+// instructions tell the agent how addressing works, because the alternative is
+// an agent that discovers it by failing.
+func (s *Server) instructions() string {
+	if s.resolver != nil && s.resolver.Pinned() {
+		return "Inspect and operate one pinned Kranz runtime. This server was launched with -C or -p and refuses any other runtime. Use explicit start/stop operations and honor confirmation_required results."
+	}
+	return "Inspect and operate live Kranz project runtimes. Every tool except runtimes, up, and down takes an optional runtime argument naming a project by name or id; omit it to use the project this server was started in. Read kranz://runtimes to see what is running, and answer runtime_required or runtime_not_found by retrying with a runtime from its candidates. Start a project that is not running with up. Use explicit start/stop operations and honor confirmation_required results."
 }

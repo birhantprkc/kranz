@@ -5,25 +5,38 @@ is reserved for JSON-RPC framing; server diagnostics go to stderr. It supports
 MCP protocol versions `2025-11-25`, `2025-06-18`, `2025-03-26`, and
 `2024-11-05`.
 
-Every resource and tool result contains `schema_version`, config `generation`,
-and session identity. Failures use `{code, message, hint?, details?}` rather
-than CLI text. Log results also contain `truncated`, `next_cursor`, and actual
-window boundaries.
+Every result contains `schema_version`, currently `2`. A result served by a
+runtime also carries that runtime's identity in `session` and the configuration
+`generation` it was read at; a global answer — `runtimes`, `up`, `down`,
+`kranz://runtimes`, `kranz://capabilities` — carries neither, because no
+runtime produced it. Failures use `{code, message, hint?, details?}` rather than
+CLI text. Log results also contain `truncated`, `next_cursor`, and actual window
+boundaries.
+
+`session` names the runtime that **answered the call**. Before `schema_version`
+2 it named what the connection was bound to; connections are no longer bound to
+anything, so the old reading has no referent. `current` in the runtime listing
+is gone for the same reason.
 
 ## Command
 
 ```bash
-kranz mcp [-C DIR] [-f FILE] [-p NAME_OR_ID] [--attach-only]
+kranz mcp [-C DIR] [-f FILE] [-p NAME_OR_ID]
 kranz mcp --help
 ```
 
-Install the ordinary Kranz binary, then register this command as a local stdio
-server in the coding-agent client. Use `--attach-only` for agent registrations:
-it refuses to create a missing runtime and names the runtimes that are already
-running. Use an absolute `-C` path for a project-scoped client, or `-p NAME|ID`
-to bind a connection to a known live runtime from any directory. The [MCP
-guide](../guide/mcp) has ready-to-copy configurations and a first-connection
-check.
+Install the ordinary Kranz binary and register `kranz mcp` once, globally, with
+no project arguments. The server starts anywhere, including a directory with no
+Kranz configuration, writes nothing to the runtime registry, and supervises
+nothing. Which runtime answers is decided per call.
+
+`-C DIR`, `-f FILE`, and `-p NAME|ID` pin the server to one project for a
+client that should reach exactly one. A pinned server rejects any other address
+with `runtime_pinned`. `--attach-only` is accepted and ignored: it disabled an
+owner fallback that no longer exists.
+
+The [MCP guide](../guide/mcp) has ready-to-copy configurations and a
+first-connection check.
 
 Do not run `kranz mcp` directly in an interactive terminal to test it: stdout
 is the protocol transport, not a human-readable prompt. Use the configured MCP
@@ -33,16 +46,42 @@ client or the repository's [minimal example client](../examples/mcp-shared-runti
 
 | URI | Contents |
 | --- | --- |
-| `kranz://session` | Runtime/session identity, protocol, ownership, generation |
-| `kranz://runtimes` | Registry sessions, service counts, and the current fixed binding |
+| `kranz://session` | Identity, protocol, and generation of the runtime this read resolved to |
+| `kranz://runtimes` | Registry sessions, service counts, and connected client counts (global) |
 | `kranz://config` | Effective config with shared secret redaction, loader diagnostics, and provenance |
 | `kranz://services` | Definitions, snapshots, and computed `primary_action` |
 | `kranz://actions` | Service/group actions and current state |
 | `kranz://graph` | Dependency, prerequisite, and ownership edges with live service state |
 | `kranz://tags` | Shared service/tag selector index |
-| `kranz://capabilities` | Exact allow-list and unavailable unsafe operations |
+| `kranz://capabilities` | Exact allow-list, addressing mode, and unavailable unsafe operations (global) |
+
+Every runtime-scoped resource has an addressed form:
+`kranz://runtimes/{runtime}/config`, `.../services`, `.../session`, and so on,
+published through `resources/templates/list`. The short URI reads whichever
+runtime the standard resolution order picks.
 
 ## Tools
+
+### Addressing
+
+Every tool except `runtimes`, `up`, and `down` takes an optional `runtime`
+argument naming a project by name or id. Resolution, first match wins:
+
+1. the `runtime` argument;
+2. the `-C`/`-p` pin, when the server was launched with one;
+3. the working directory the MCP process was started in, resolved to a runtime
+   name exactly as the CLI resolves it without `-p` — a registry lookup, never a
+   creation;
+4. otherwise `runtime_required`, carrying every running runtime as a candidate.
+
+`runtimes` takes no `runtime`: listing what exists cannot be scoped to one of
+the things it lists.
+
+The working directory is fixed when the client spawns the server and does not
+follow a user who moves to another project mid-session. That case lands on
+`runtime_required`, whose candidates can be passed straight back as `runtime`.
+
+### The catalogue
 
 Observation tools are `runtimes`, `status`, `changes`, `plan`, `graph`, `ports`,
 `port_inspect`, `logs`, `wait`, `health`, `doctor`, `action_list`,
@@ -61,11 +100,24 @@ Actions always use `OWNER/ACTION`. `start` defaults
 Lifecycle mutations require at least one explicit selector; an omitted or empty
 list cannot turn an agent request into a project-wide start, stop, or restart.
 
-One MCP connection remains bound to one runtime. The `runtimes` tool and
-`kranz://runtimes` resource show every registry session visible to the user and
-flag the current binding. If a service/tag misses here but matches another
-running runtime, `selector_not_found` names that runtime in `available_in`
-instead of letting the caller conclude the service is globally unavailable.
+If a service or tag misses in the runtime that answered but matches another
+running runtime, `selector_not_found` names that runtime in `available_in`.
+Repeating the call with that `runtime` succeeds: the error carries the argument
+that fixes it.
+
+### Starting and stopping a runtime
+
+`up` starts the runtime of a project that has none, and starts no service. It
+takes `directory` (defaulting to the directory the server was started in) and
+requires `confirm: true`, because the runtime it creates is a background
+process that outlives the session and stays in `kranz ps` until someone stops
+it. Nothing else creates a runtime: every other tool answers
+`runtime_not_found` for a project that is not running, and names `up` in the
+hint.
+
+`down` stops a runtime **this MCP process started through `up`**, after
+`confirm: true`. Any other runtime answers `not_owned`: a project someone is
+working in is not an agent's to stop.
 
 `logs` accepts `tail` (maximum 1000), `since` as RFC3339 or a duration,
 `sources`, `run`, `runs`, `with_actions`, and an opaque cursor. The server
@@ -126,11 +178,13 @@ Stable causal codes include `selector_not_found`, `service_unavailable`,
 configuration still declares — a reload race, or an attached runtime that went
 away mid-call.
 
-`owner_reason: created_missing_runtime` means this MCP process used the
-non-attach fallback because its selected runtime did not exist. The session
-resource also names other runtimes that were already running. Agent
-registrations should normally use `--attach-only`; omit it only when the MCP
-process is deliberately allowed to own and clean up a new stack.
+Addressing has its own codes. `runtime_required` means no call, pin, or working
+directory named a runtime, and carries `candidates`. `runtime_not_found` means
+the named project has no live runtime; its hint names `up`. `runtime_pinned`
+means a `-C`/`-p` server was asked for a different project. `not_owned` means
+`down` was asked to stop a runtime this session did not start.
+`runtime_version_mismatch` fails the one call that named a runtime built from an
+incompatible protocol version, and leaves every other runtime served.
 
 The allow-list cannot reach project-wide down/force-down, `StopAll`, raw force
 start/stop, shutdown, external PID/port release, arbitrary shell execution,
@@ -138,9 +192,13 @@ interactive leases, or test-only application methods.
 
 ## What is deliberately not here
 
-Creating or destroying runtimes (`up`, `down`, `attach`), writing a
-configuration (`init`), interactive actions and their terminal leases, and
-per-field configuration provenance (`kranz config explain`) have no tool. The
-first three change what a runtime is rather than what it is doing, the fourth
-needs a terminal, and the last is a rendering of the layered files that
-`kranz://config` already delivers whole.
+`attach`, writing a configuration (`init`), interactive actions and their
+terminal leases, and per-field configuration provenance (`kranz config
+explain`) have no tool. Attaching is what every call already does, `init`
+writes files a person should read first, interactive actions need a terminal,
+and provenance is a rendering of the layered files that `kranz://config`
+already delivers whole.
+
+`up` and `down` are here, narrowly: `up` starts a runtime with no services, and
+`down` reaches only what `up` created in this session. Neither can touch a
+project someone else is running.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,13 @@ type Supervisor struct {
 	conns   map[*net.UnixConn]struct{}
 	closing bool
 
+	// connected records who is attached, not just how many. A runtime is
+	// shared by a TUI, CLI invocations, and any number of agents, and after
+	// v0.11.0 an MCP process has no registry entry of its own to be seen in.
+	clientMu    sync.Mutex
+	connected   map[uint64]ClientInfo
+	nextClientN uint64
+
 	stopWatch chan struct{}
 	watchDone chan struct{}
 	watching  atomic.Bool
@@ -64,6 +72,7 @@ func NewSupervisor(local *app.Local) *Supervisor {
 	return &Supervisor{
 		local:                   local,
 		conns:                   make(map[*net.UnixConn]struct{}),
+		connected:               make(map[uint64]ClientInfo),
 		stopWatch:               make(chan struct{}),
 		watchDone:               make(chan struct{}),
 		closed:                  make(chan struct{}),
@@ -195,13 +204,15 @@ func (s *Supervisor) handleConn(conn *net.UnixConn) {
 	}
 
 	c := newCodec(conn)
-	provenance, ok := s.handshake(c)
+	provenance, info, ok := s.handshake(c)
 	if !ok {
 		return
 	}
 
 	s.clients.Add(1)
 	defer s.clients.Add(-1)
+	token := s.registerClient(info)
+	defer s.unregisterClient(token)
 
 	pendingMu := sync.Mutex{}
 	pending := make(map[uint64]context.CancelFunc)
@@ -300,14 +311,47 @@ func (l *connectionLeases) releaseAll(local *app.Local) {
 // server decodes before any method dispatch table applies, matching the
 // README's requirement that hello, inspect, and down stay readable across
 // protocol versions.
-func (s *Supervisor) handshake(c *codec) (service.RunProvenance, bool) {
+// registerClient records one connection for the lifetime of its handler.
+func (s *Supervisor) registerClient(info ClientInfo) uint64 {
+	s.clientMu.Lock()
+	defer s.clientMu.Unlock()
+	s.nextClientN++
+	token := s.nextClientN
+	s.connected[token] = info
+	return token
+}
+
+func (s *Supervisor) unregisterClient(token uint64) {
+	s.clientMu.Lock()
+	delete(s.connected, token)
+	s.clientMu.Unlock()
+}
+
+// ConnectedClients lists the connections this runtime is serving, oldest
+// first.
+func (s *Supervisor) ConnectedClients() []ClientInfo {
+	s.clientMu.Lock()
+	tokens := make([]uint64, 0, len(s.connected))
+	for token := range s.connected {
+		tokens = append(tokens, token)
+	}
+	sort.Slice(tokens, func(i, j int) bool { return tokens[i] < tokens[j] })
+	clients := make([]ClientInfo, 0, len(tokens))
+	for _, token := range tokens {
+		clients = append(clients, s.connected[token])
+	}
+	s.clientMu.Unlock()
+	return clients
+}
+
+func (s *Supervisor) handshake(c *codec) (service.RunProvenance, ClientInfo, bool) {
 	msg, err := c.receive()
 	if err != nil || msg.Type != messageRequest || msg.Method != methodHello {
-		return service.RunProvenance{}, false
+		return service.RunProvenance{}, ClientInfo{}, false
 	}
 	var req helloRequest
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
-		return service.RunProvenance{}, false
+		return service.RunProvenance{}, ClientInfo{}, false
 	}
 	if req.ProtocolMin > protocolVersion || req.ProtocolMax < protocolVersion {
 		payload := errorPayload{
@@ -321,7 +365,7 @@ func (s *Supervisor) handshake(c *codec) (service.RunProvenance, bool) {
 		}
 		body, _ := json.Marshal(payload)
 		_ = c.send(envelope{Type: messageError, ID: msg.ID, Body: body})
-		return service.RunProvenance{}, false
+		return service.RunProvenance{}, ClientInfo{}, false
 	}
 	resp := helloResponse{
 		ProtocolMin: protocolVersion, ProtocolMax: protocolVersion,
@@ -329,15 +373,28 @@ func (s *Supervisor) handshake(c *codec) (service.RunProvenance, bool) {
 	}
 	body, err := json.Marshal(resp)
 	if err != nil {
-		return service.RunProvenance{}, false
+		return service.RunProvenance{}, ClientInfo{}, false
 	}
 	if c.send(envelope{Type: messageResponse, ID: msg.ID, Body: body}) != nil {
-		return service.RunProvenance{}, false
+		return service.RunProvenance{}, ClientInfo{}, false
 	}
-	return service.RunProvenance{Surface: req.Surface, ClientLabel: req.ClientLabel}, true
+	info := ClientInfo{Surface: req.Surface, Label: req.ClientLabel, PID: req.ClientPID, Version: req.ClientVersion, ConnectedAt: time.Now()}
+	return service.RunProvenance{Surface: req.Surface, ClientLabel: req.ClientLabel}, info, true
 }
 
 func (s *Supervisor) dispatch(ctx context.Context, c *codec, msg envelope, leases *connectionLeases) {
+	// clients is supervisor state rather than application state: it describes
+	// who is talking to this runtime, which app.Local has no way to know.
+	if msg.Method == methodClients {
+		body, err := json.Marshal(clientsResponse{Clients: s.ConnectedClients()})
+		if err != nil {
+			body, _ = json.Marshal(errorPayload{Kind: errorGeneric, Message: err.Error()})
+			_ = c.send(envelope{Type: messageError, ID: msg.ID, Body: body})
+			return
+		}
+		_ = c.send(envelope{Type: messageResponse, ID: msg.ID, Body: body})
+		return
+	}
 	entry, ok := handlers[msg.Method]
 	if !ok {
 		body, _ := json.Marshal(errorPayload{Kind: errorGeneric, Message: fmt.Sprintf("unknown method %q", msg.Method)})

@@ -47,6 +47,7 @@ type helloRequest struct {
 	ClientVersion string `json:"client_version"`
 	Surface       string `json:"surface,omitempty"`
 	ClientLabel   string `json:"client_label,omitempty"`
+	ClientPID     int    `json:"client_pid,omitempty"`
 }
 
 // helloResponse is the server's answer once it has picked a protocol version

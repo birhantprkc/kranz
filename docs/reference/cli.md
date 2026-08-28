@@ -139,6 +139,7 @@ when any check fails.
 
 ```bash
 kranz ps                            # every runtime this user has running
+kranz clients                       # who is attached to those runtimes
 kranz up [SELECTOR ...]             # foreground runtime with multiplexed logs
 kranz up -d [SELECTOR ...]          # background runtime, returns the prompt
 kranz up --no-start                 # an empty foreground runtime
@@ -159,24 +160,46 @@ session, not the ordinary way to stop a project.
 Leaving an attached TUI does not stop a background runtime. An external `down`
 closes attached clients cleanly.
 
-`ps` reports the lifecycle owner in its `MODE` column. The possible owner modes
-are `tui`, `foreground`, `background`, and `mcp`. Different runtime rows can use
-different modes at the same time, and the same project can have multiple rows
-when each was given a distinct runtime name with `-p`. One session ID has only
-one owner mode: an attached TUI, CLI command, or additional MCP bridge remains
-a client of that session and does not add another mode or another `ps` row.
+`ps` lists runtimes; `clients` lists the CLI, TUI, and MCP connections working
+in them, with surface, label, PID, and connection age. They are two commands
+because they answer two questions: what is running, and who is using it. Narrow
+either one to a single runtime with `-p NAME|ID`.
 
-### Serving a runtime to a coding agent
+```console
+$ kranz ps
+ID        NAME     PROJECT  SERVICES  CLIENTS  STATE    UPTIME
+98784c10  myclass  MyClass  4/4       2        running  11m
+
+$ kranz clients
+RUNTIME  SURFACE  CLIENT      PID    CONNECTED
+myclass  tui      kranz TUI   64231  11m
+myclass  mcp      MCP: codex  64802  3m
+```
+
+Every `ps` row is a lifecycle owner: a `kranz up` process or a TUI that started
+the project. An attached TUI, a CLI command, and an MCP server are clients of
+that session — they appear in `clients`, never as a second `ps` row. The same
+project can have several rows when each was given a distinct runtime name with
+`-p`. `--output json` still carries the launch `mode`, `services`, `running`,
+and `clients` counts for scripts that want them.
+
+### Serving runtimes to a coding agent
 
 ```bash
-kranz mcp --attach-only             # attach-only stdio MCP server (recommended)
+kranz mcp                           # one global stdio MCP server
+kranz mcp -C /path/to/project       # pinned to exactly one project
 ```
 
 `mcp` speaks the Model Context Protocol on stdin and stdout, so stdout carries
 JSON-RPC framing and nothing else; `--output` is refused and diagnostics go to
-stderr. One connection stays bound to one runtime. `--attach-only` refuses a
-missing runtime and lists other live sessions; without it, MCP can create and
-own the selected project when none exists. See the [MCP reference](./mcp.md).
+stderr.
+
+The server needs no project. It starts in any directory, writes no registry
+entry, supervises nothing, and picks the runtime per call: the tool's `runtime`
+argument, then the `-C`/`-p` pin, then the directory it was started in, then an
+error carrying the runtimes that would have worked. `-C`, `-f`, and `-p` pin the
+connection to one project and make every other address an error.
+`--attach-only` is accepted and ignored. See the [MCP reference](./mcp.md).
 
 ### Logs
 

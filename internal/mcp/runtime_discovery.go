@@ -8,8 +8,9 @@ import (
 	kranzruntime "github.com/kranz-org/kranz/internal/runtime"
 )
 
-// RuntimeEntry is the read-only registry view exposed to an MCP client. Current
-// makes the connection's fixed project binding explicit among all sessions.
+// RuntimeEntry is the read-only registry view exposed to an MCP client. It has
+// no "current" flag: with per-call addressing there is no current runtime, and
+// a field claiming otherwise would be answering a question nobody asked.
 type RuntimeEntry struct {
 	ID            string                    `json:"id"`
 	Name          string                    `json:"name"`
@@ -21,7 +22,7 @@ type RuntimeEntry struct {
 	UptimeSeconds int64                     `json:"uptime_seconds"`
 	Services      *int                      `json:"services"`
 	Running       *int                      `json:"running"`
-	Current       bool                      `json:"current"`
+	Clients       *int                      `json:"clients"`
 }
 
 type RuntimeSelectorMatch struct {
@@ -36,11 +37,7 @@ func (s *Server) runtimeEntries(ctx context.Context) ([]RuntimeEntry, error) {
 	if s.runtimeListOverride != nil {
 		return s.runtimeListOverride(ctx)
 	}
-	registry, err := kranzruntime.DefaultRegistry()
-	if err != nil {
-		return nil, err
-	}
-	records, err := registry.List(ctx, s.session.KranzVersion)
+	records, err := s.records(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -50,30 +47,41 @@ func (s *Server) runtimeEntries(ctx context.Context) ([]RuntimeEntry, error) {
 			ID: record.ID, Name: record.Name, Project: record.Project, Directory: record.Directory,
 			Mode: record.Mode, State: record.State, StartedAt: record.StartedAt,
 			UptimeSeconds: max(0, int64(time.Since(record.StartedAt).Seconds())),
-			Services:      record.Services, Running: record.Running, Current: record.ID == s.session.ID,
+			Services:      record.Services, Running: record.Running, Clients: record.Clients,
 		})
 	}
 	return entries, nil
 }
 
-func (s *Server) selectorMatches(ctx context.Context, selector string) ([]RuntimeSelectorMatch, error) {
-	if s.selectorMatchOverride != nil {
-		return s.selectorMatchOverride(ctx, selector)
+// records reads the registry the resolver was built with, so tests and a
+// pinned launch see the same list the resolution rules see.
+func (s *Server) records(ctx context.Context) ([]kranzruntime.SessionRecord, error) {
+	if s.resolver != nil && s.resolver.registry != nil {
+		return s.resolver.registry.List(ctx, s.kranzVersion)
 	}
 	registry, err := kranzruntime.DefaultRegistry()
 	if err != nil {
 		return nil, err
 	}
-	records, err := registry.List(ctx, s.session.KranzVersion)
+	return registry.List(ctx, s.kranzVersion)
+}
+
+// selectorMatches answers "this name exists one runtime over". excludeID is the
+// runtime that already failed to find it.
+func (s *Server) selectorMatches(ctx context.Context, selector, excludeID string) ([]RuntimeSelectorMatch, error) {
+	if s.selectorMatchOverride != nil {
+		return s.selectorMatchOverride(ctx, selector)
+	}
+	records, err := s.records(ctx)
 	if err != nil {
 		return nil, err
 	}
 	matches := make([]RuntimeSelectorMatch, 0)
 	for _, record := range records {
-		if record.ID == s.session.ID || record.State != kranzruntime.SessionRunning {
+		if record.ID == excludeID || record.State != kranzruntime.SessionRunning {
 			continue
 		}
-		client, dialErr := kranzruntime.DialContext(ctx, record.Socket, s.session.KranzVersion)
+		client, dialErr := kranzruntime.DialContext(ctx, record.Socket, s.kranzVersion)
 		if dialErr != nil {
 			continue
 		}

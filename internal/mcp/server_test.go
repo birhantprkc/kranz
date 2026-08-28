@@ -36,13 +36,13 @@ func testServer(t *testing.T) (*Server, *app.Local) {
 	}, ServiceOrder: []string{"api"}}
 	local := app.NewLocal(cfg, nil, app.Options{SessionID: "session-1"})
 	t.Cleanup(func() { _ = local.Shutdown() })
-	server := NewServer(local, SessionIdentity{ID: "session-1", Name: "demo", Project: "demo", ConnectionMode: "owner", ProtocolVersion: 2}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
+	server := NewServerForRuntime(local, SessionIdentity{ID: "session-1", Name: "demo", Project: "demo", ProtocolVersion: 2}, bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 	return server, local
 }
 
 func TestFailedActionReturnsRunSnapshotAndCausalCode(t *testing.T) {
 	server, _ := testServer(t)
-	result := server.tools["action_run"].handler(context.Background(), json.RawMessage(`{"action":"api/fail"}`))
+	result := testTool(t, server, "action_run", `{"action":"api/fail"}`)
 	if result.Error == nil || result.Error.Code != "action_failed" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -54,7 +54,7 @@ func TestFailedActionReturnsRunSnapshotAndCausalCode(t *testing.T) {
 
 func TestConfigResourceUsesSharedRedaction(t *testing.T) {
 	server, _ := testServer(t)
-	result := server.resources["kranz://config"].handler(context.Background())
+	result := testResource(t, server, "kranz://config")
 	payload, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestConfigResourceUsesSharedRedaction(t *testing.T) {
 	if !strings.Contains(text, `"PUBLIC_URL":"https://example.com"`) {
 		t.Fatalf("public URL was redacted: %s", text)
 	}
-	services := server.resources["kranz://services"].handler(context.Background())
+	services := testResource(t, server, "kranz://services")
 	payload, _ = json.Marshal(services)
 	if strings.Contains(string(payload), "super-secret") || strings.Contains(string(payload), "database-secret") || !strings.Contains(string(payload), "[redacted]") {
 		t.Fatalf("services redaction = %s", payload)
@@ -78,7 +78,7 @@ func TestConfigResourceUsesSharedRedaction(t *testing.T) {
 
 func TestWaitTimeoutIsCausalAndDoesNotMutateService(t *testing.T) {
 	server, local := testServer(t)
-	result := server.tools["wait"].handler(context.Background(), json.RawMessage(`{"selectors":["api"],"condition":"running","timeout":"10ms"}`))
+	result := testTool(t, server, "wait", `{"selectors":["api"],"condition":"running","timeout":"10ms"}`)
 	if result.Error == nil || result.Error.Code != "wait_timeout" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -91,7 +91,7 @@ func TestWaitTimeoutIsCausalAndDoesNotMutateService(t *testing.T) {
 func TestWaitReturnsTheJournalCursorThroughMCP(t *testing.T) {
 	server, local := testServer(t)
 	local.SetServiceStatusForTest("api", config.StatusRunning)
-	result := server.tools["wait"].handler(context.Background(), json.RawMessage(`{"selectors":["api"],"condition":"running"}`))
+	result := testTool(t, server, "wait", `{"selectors":["api"],"condition":"running"}`)
 	if result.Error != nil {
 		t.Fatalf("wait = %#v", result.Error)
 	}
@@ -114,7 +114,7 @@ func TestLifecycleMutationsRequireExplicitSelectors(t *testing.T) {
 			t.Fatalf("%s selectors schema = %#v", name, selectors)
 		}
 		for _, arguments := range []string{`{}`, `{"selectors":[]}`} {
-			result := definition.handler(context.Background(), json.RawMessage(arguments))
+			result := testTool(t, server, name, arguments)
 			if result.Error == nil || result.Error.Code != "invalid_arguments" {
 				t.Fatalf("%s %s = %#v", name, arguments, result)
 			}
@@ -137,8 +137,8 @@ func (a *blockingWaitAPI) Wait(ctx context.Context, _ app.WaitRequest) (app.Wait
 
 func TestServeCancelsPendingRequestsWhenStdinCloses(t *testing.T) {
 	server, _ := testServer(t)
-	api := &blockingWaitAPI{API: server.api, started: make(chan struct{}), cancelled: make(chan struct{})}
-	server.api = api
+	api := &blockingWaitAPI{API: server.testAPI(), started: make(chan struct{}), cancelled: make(chan struct{})}
+	server.setTestAPI(api)
 	server.initialized.Store(true)
 	reader, writer := io.Pipe()
 	server.stdin = reader
@@ -213,8 +213,8 @@ func TestActionRequestCancellationLeavesActionRunning(t *testing.T) {
 	server, local := testServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan ResultEnvelope, 1)
-	go func() { done <- server.tools["action_run"].handler(ctx, json.RawMessage(`{"action":"api/slow"}`)) }()
-	id, _, _ := server.resolveAction("api/slow")
+	go func() { done <- testToolContext(t, ctx, server, "action_run", `{"action":"api/slow"}`) }()
+	id, _, _ := server.testScope().resolveAction("api/slow")
 	deadline := time.Now().Add(time.Second)
 	for {
 		state, _ := local.ActionState(id)
@@ -249,7 +249,7 @@ func TestActionRequestCancellationLeavesActionRunning(t *testing.T) {
 
 func TestActionRunConfirmationAndRunIdentityRoundTrip(t *testing.T) {
 	server, _ := testServer(t)
-	first := server.tools["action_run"].handler(context.Background(), json.RawMessage(`{"action":"api/deploy"}`))
+	first := testTool(t, server, "action_run", `{"action":"api/deploy"}`)
 	if first.Error == nil || first.Error.Code != "confirmation_required" {
 		t.Fatalf("first = %#v", first)
 	}
@@ -257,20 +257,20 @@ func TestActionRunConfirmationAndRunIdentityRoundTrip(t *testing.T) {
 	if token == "" {
 		t.Fatalf("confirmation details = %#v", first.Error.Details)
 	}
-	second := server.tools["action_run"].handler(context.Background(), json.RawMessage(`{"action":"api/deploy","confirmation_token":"`+token+`"}`))
+	second := testTool(t, server, "action_run", `{"action":"api/deploy","confirmation_token":"`+token+`"}`)
 	if second.Error != nil {
 		t.Fatalf("second = %#v", second)
 	}
 
-	run := server.tools["action_run"].handler(context.Background(), json.RawMessage(`{"action":"api/migrate"}`))
+	run := testTool(t, server, "action_run", `{"action":"api/migrate"}`)
 	if run.Error != nil {
 		t.Fatalf("run = %#v", run)
 	}
-	result := server.tools["action_result"].handler(context.Background(), json.RawMessage(`{"action":"api/migrate","run":-1}`))
+	result := testTool(t, server, "action_result", `{"action":"api/migrate","run":-1}`)
 	if result.Error != nil {
 		t.Fatalf("result = %#v", result)
 	}
-	logs := server.tools["logs"].handler(context.Background(), json.RawMessage(`{"selectors":["api/migrate"],"run":-1}`))
+	logs := testTool(t, server, "logs", `{"selectors":["api/migrate"],"run":-1}`)
 	if logs.Error != nil {
 		t.Fatalf("logs = %#v", logs)
 	}
@@ -289,7 +289,7 @@ func TestMCPUsesSameSelectorsPlansAndLogsAsApplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolPlan := server.tools["plan"].handler(context.Background(), json.RawMessage(`{"operation":"start","selectors":["backend"],"include_dependencies":true}`))
+	toolPlan := testTool(t, server, "plan", `{"operation":"start","selectors":["backend"],"include_dependencies":true}`)
 	if toolPlan.Error != nil {
 		t.Fatalf("tool plan = %#v", toolPlan)
 	}
@@ -301,7 +301,7 @@ func TestMCPUsesSameSelectorsPlansAndLogsAsApplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolLogs := server.tools["logs"].handler(context.Background(), json.RawMessage(`{"selectors":["backend"],"tail":1,"sources":["stderr"]}`))
+	toolLogs := testTool(t, server, "logs", `{"selectors":["backend"],"tail":1,"sources":["stderr"]}`)
 	if toolLogs.Error != nil {
 		t.Fatalf("tool logs = %#v", toolLogs)
 	}
@@ -322,11 +322,11 @@ func TestRunDeleteToolRequiresConfirmationAndDeletesExactRun(t *testing.T) {
 	local.SetServiceStateForTest("api", completed)
 	local.SetServiceStatusForTest("api", config.StatusStopped)
 
-	result := server.tools["run_delete"].handler(context.Background(), json.RawMessage(`{"target":"api","run":1}`))
+	result := testTool(t, server, "run_delete", `{"target":"api","run":1}`)
 	if result.Error == nil || result.Error.Code != "confirmation_required" || len(local.Runs()) != 1 {
 		t.Fatalf("unconfirmed delete = %#v, runs=%#v", result, local.Runs())
 	}
-	result = server.tools["run_delete"].handler(context.Background(), json.RawMessage(`{"target":"api","run":1,"confirm":true}`))
+	result = testTool(t, server, "run_delete", `{"target":"api","run":1,"confirm":true}`)
 	if result.Error != nil || len(local.Runs()) != 0 || len(local.Logs("api")) != 0 {
 		t.Fatalf("confirmed delete = %#v, runs=%#v logs=%#v", result, local.Runs(), local.Logs("api"))
 	}
@@ -347,7 +347,7 @@ func TestCapabilitySurfaceIsExactAllowList(t *testing.T) {
 		t.Fatalf("implemented tools = %v, allow-list = %v", implemented, want)
 	}
 	for _, definition := range server.listTools() {
-		if definition.Name == "" || definition.handler == nil {
+		if definition.Name == "" || (definition.scoped == nil && definition.global == nil) {
 			t.Fatalf("listed tool has no definition: %#v", definition)
 		}
 		if definition.OutputSchema == nil {
@@ -372,22 +372,25 @@ func TestCapabilitySurfaceIsExactAllowList(t *testing.T) {
 	}
 }
 
-func TestRuntimesToolAndResourceFlagCurrentBinding(t *testing.T) {
+func TestRuntimesToolAndResourceListEveryRunningRuntime(t *testing.T) {
 	server, _ := testServer(t)
 	entries := []RuntimeEntry{
-		{ID: "session-1", Name: "harness", State: kranzruntime.SessionRunning, Current: true},
+		{ID: "session-1", Name: "harness", State: kranzruntime.SessionRunning},
 		{ID: "other-1", Name: "myclass", State: kranzruntime.SessionRunning, Services: intPointer(4)},
 	}
 	server.runtimeListOverride = func(context.Context) ([]RuntimeEntry, error) { return entries, nil }
 	for _, result := range []ResultEnvelope{
-		server.tools["runtimes"].handler(context.Background(), json.RawMessage(`{}`)),
-		server.resources["kranz://runtimes"].handler(context.Background()),
+		testTool(t, server, "runtimes", `{}`),
+		testResource(t, server, "kranz://runtimes"),
 	} {
 		if result.Error != nil {
 			t.Fatalf("runtimes = %#v", result.Error)
 		}
+		if result.Session != nil {
+			t.Fatalf("runtimes is global and must not claim a runtime answered it: %#v", result.Session)
+		}
 		payload, _ := json.Marshal(result.Data)
-		if !strings.Contains(string(payload), `"name":"harness"`) || !strings.Contains(string(payload), `"current":true`) || !strings.Contains(string(payload), `"name":"myclass"`) {
+		if !strings.Contains(string(payload), `"name":"harness"`) || !strings.Contains(string(payload), `"name":"myclass"`) {
 			t.Fatalf("runtimes payload = %s", payload)
 		}
 	}
@@ -395,14 +398,14 @@ func TestRuntimesToolAndResourceFlagCurrentBinding(t *testing.T) {
 
 func TestSelectorNotFoundNamesCurrentAndMatchingRuntime(t *testing.T) {
 	server, _ := testServer(t)
-	server.session.Name = "harness"
+	server.setTestSessionName("harness")
 	server.selectorMatchOverride = func(_ context.Context, selector string) ([]RuntimeSelectorMatch, error) {
 		if selector != "im-core" {
 			t.Fatalf("selector = %q", selector)
 		}
 		return []RuntimeSelectorMatch{{Runtime: "myclass", ID: "ec52bcfb", Kind: "service", Service: "im-core"}}, nil
 	}
-	result := server.tools["status"].handler(context.Background(), json.RawMessage(`{"selectors":["im-core"]}`))
+	result := testTool(t, server, "status", `{"selectors":["im-core"]}`)
 	if result.Error == nil || result.Error.Code != "selector_not_found" || !strings.Contains(result.Error.Message, `runtime "harness"`) || !strings.Contains(result.Error.Hint, "another running runtime") {
 		t.Fatalf("error = %#v", result.Error)
 	}
@@ -412,31 +415,29 @@ func TestSelectorNotFoundNamesCurrentAndMatchingRuntime(t *testing.T) {
 	}
 }
 
-func TestOwnerFallbackSessionNamesOtherRunningRuntimes(t *testing.T) {
-	server, _ := testServer(t)
-	server.session.OwnerReason = "created_missing_runtime"
-	server.runtimeListOverride = func(context.Context) ([]RuntimeEntry, error) {
-		return []RuntimeEntry{{ID: "session-1", Name: "harness", Current: true, State: kranzruntime.SessionRunning}, {ID: "other", Name: "myclass", State: kranzruntime.SessionRunning}}, nil
-	}
-	result := server.resources["kranz://session"].handler(context.Background())
-	payload, _ := json.Marshal(result)
-	if !strings.Contains(string(payload), `"owner_reason":"created_missing_runtime"`) || !strings.Contains(string(payload), `"other_running_runtimes"`) || !strings.Contains(string(payload), `"name":"myclass"`) {
-		t.Fatalf("session = %s", payload)
-	}
-}
-
 func intPointer(value int) *int { return &value }
 
 func TestEveryResultCarriesIdentityGenerationAndSchema(t *testing.T) {
 	server, _ := testServer(t)
 	for _, uri := range server.resourceOrder {
-		result := server.resources[uri].handler(context.Background())
-		if result.SchemaVersion != SchemaVersion || result.Session.ID != "session-1" || result.Generation == 0 {
+		result := testResource(t, server, uri)
+		if result.SchemaVersion != SchemaVersion {
+			t.Fatalf("%s envelope = %#v", uri, result)
+		}
+		// A global resource is answered by the MCP process, so it carries no
+		// runtime identity; a runtime-scoped one always names who answered.
+		if server.resources[uri].global != nil {
+			if result.Session != nil {
+				t.Fatalf("%s is global and carries a session: %#v", uri, result.Session)
+			}
+			continue
+		}
+		if result.Session == nil || result.Session.ID != "session-1" || result.Generation == 0 {
 			t.Fatalf("%s envelope = %#v", uri, result)
 		}
 	}
-	result := server.tools["status"].handler(context.Background(), json.RawMessage(`{"selectors":["backend"]}`))
-	if result.Error != nil || result.SchemaVersion != 1 || result.Session.ID != "session-1" {
+	result := testTool(t, server, "status", `{"selectors":["backend"]}`)
+	if result.Error != nil || result.SchemaVersion != SchemaVersion || result.Session == nil || result.Session.ID != "session-1" {
 		t.Fatalf("status = %#v", result)
 	}
 	payload, _ := json.Marshal(result)
@@ -447,7 +448,7 @@ func TestEveryResultCarriesIdentityGenerationAndSchema(t *testing.T) {
 
 func TestInteractiveActionReturnsStableAddressAndHint(t *testing.T) {
 	server, _ := testServer(t)
-	result := server.tools["action_run"].handler(context.Background(), json.RawMessage(`{"action":"api/shell"}`))
+	result := testTool(t, server, "action_run", `{"action":"api/shell"}`)
 	if result.Error == nil || result.Error.Code != "interactive_action" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -485,7 +486,7 @@ func TestStdioContainsOnlyJSONRPCFrames(t *testing.T) {
 
 func TestStartAllowsPlannedExactTargetsWithoutExposingForceMethod(t *testing.T) {
 	server, _ := testServer(t)
-	result := server.tools["start"].handler(context.Background(), json.RawMessage(`{"selectors":["api"],"include_dependencies":false}`))
+	result := testTool(t, server, "start", `{"selectors":["api"],"include_dependencies":false}`)
 	if result.Error != nil {
 		t.Fatalf("result = %#v", result)
 	}
@@ -499,7 +500,7 @@ func TestHandlerPanicFailsOneCallInsteadOfTheProcess(t *testing.T) {
 	server.initialized.Store(true)
 	// This process may also be the supervisor: a panic inside one tool must
 	// not take the managed services down with it.
-	server.tools["status"] = toolDefinition{Name: "status", InputSchema: objectSchema(nil), handler: func(context.Context, json.RawMessage) ResultEnvelope {
+	server.tools["status"] = toolDefinition{Name: "status", InputSchema: objectSchema(nil), scoped: func(*scope, context.Context, json.RawMessage) ResultEnvelope {
 		panic("handler exploded")
 	}}
 	var stdout, stderr bytes.Buffer
@@ -522,11 +523,11 @@ func TestUnavailableServiceIsCausalRatherThanFatal(t *testing.T) {
 	server, _ := testServer(t)
 	// ResolveServiceSelectors answers from configuration; the runtime answers
 	// for live state. When the two disagree, the tool must say so.
-	if _, err := server.selectedServices([]string{"api"}); err != nil {
+	if _, err := server.testScope().selectedServices([]string{"api"}); err != nil {
 		t.Fatalf("configured service = %v", err)
 	}
-	server.api = missingServiceAPI{API: server.api}
-	result := server.statusTool(context.Background(), json.RawMessage(`{"selectors":["api"]}`))
+	server.setTestAPI(missingServiceAPI{API: server.testAPI()})
+	result := testTool(t, server, "status", `{"selectors":["api"]}`)
 	if result.Error == nil || result.Error.Code != "service_unavailable" {
 		t.Fatalf("result = %#v", result.Error)
 	}
@@ -541,32 +542,32 @@ func (missingServiceAPI) Service(string) (*app.ServiceSnapshot, bool) { return n
 
 func TestChangesGraphAndPreflightAnswerThroughTheApplicationLayer(t *testing.T) {
 	server, local := testServer(t)
-	before := server.tools["changes"].handler(context.Background(), json.RawMessage(`{}`))
+	before := testTool(t, server, "changes", `{}`)
 	if before.Error != nil {
 		t.Fatalf("changes = %#v", before.Error)
 	}
 	cursor := before.Data.(app.ChangeResult).Cursor
 	local.SetServiceStatusForTest("api", config.StatusStarting)
 
-	after := server.tools["changes"].handler(context.Background(), json.RawMessage(fmt.Sprintf(`{"since":%d}`, cursor)))
+	after := testTool(t, server, "changes", fmt.Sprintf(`{"since":%d}`, cursor))
 	changes := after.Data.(app.ChangeResult).Changes
 	if len(changes) != 1 || changes[0].Service != "api" || changes[0].To != "starting" {
 		t.Fatalf("changes = %#v", changes)
 	}
 
-	graph := server.tools["graph"].handler(context.Background(), json.RawMessage(`{}`))
+	graph := testTool(t, server, "graph", `{}`)
 	if graph.Error != nil || len(graph.Data.(app.Graph).Nodes) == 0 {
 		t.Fatalf("graph = %#v", graph)
 	}
-	doctor := server.tools["doctor"].handler(context.Background(), json.RawMessage(`{}`))
+	doctor := testTool(t, server, "doctor", `{}`)
 	if doctor.Error != nil || doctor.Data.(app.PreflightResult).ServicesChecked != 1 {
 		t.Fatalf("doctor = %#v", doctor)
 	}
-	health := server.tools["health"].handler(context.Background(), json.RawMessage(`{"selectors":["api"],"history":true}`))
+	health := testTool(t, server, "health", `{"selectors":["api"],"history":true}`)
 	if health.Error != nil {
 		t.Fatalf("health = %#v", health.Error)
 	}
-	reload := server.tools["reload"].handler(context.Background(), json.RawMessage(`{"force":false}`))
+	reload := testTool(t, server, "reload", `{"force":false}`)
 	if reload.Error != nil {
 		t.Fatalf("reload = %#v", reload.Error)
 	}
@@ -574,7 +575,7 @@ func TestChangesGraphAndPreflightAnswerThroughTheApplicationLayer(t *testing.T) 
 
 func TestPortInspectSeparatesManagedFromForeignListeners(t *testing.T) {
 	server, _ := testServer(t)
-	result := server.tools["port_inspect"].handler(context.Background(), json.RawMessage(`{"ports":[65535]}`))
+	result := testTool(t, server, "port_inspect", `{"ports":[65535]}`)
 	if result.Error != nil {
 		t.Fatalf("port_inspect = %#v", result.Error)
 	}
@@ -582,12 +583,12 @@ func TestPortInspectSeparatesManagedFromForeignListeners(t *testing.T) {
 	if len(entries) != 1 || entries[0]["port"] != 65535 {
 		t.Fatalf("entries = %#v", entries)
 	}
-	if bad := server.tools["port_inspect"].handler(context.Background(), json.RawMessage(`{"ports":[]}`)); bad.Error == nil {
+	if bad := testTool(t, server, "port_inspect", `{"ports":[]}`); bad.Error == nil {
 		t.Fatal("an empty port list must be rejected")
 	}
 }
 
-func TestResourceTemplatesListIsAnEmptyListNotAnError(t *testing.T) {
+func TestResourceTemplatesListPublishesTheAddressedForm(t *testing.T) {
 	server, _ := testServer(t)
 	input := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`,
@@ -599,7 +600,7 @@ func TestResourceTemplatesListIsAnEmptyListNotAnError(t *testing.T) {
 	if err := server.Serve(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), `"resourceTemplates":[]`) || strings.Contains(stdout.String(), "-32601") {
+	if !strings.Contains(stdout.String(), `"uriTemplate":"kranz://runtimes/{runtime}/config"`) || strings.Contains(stdout.String(), "-32601") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

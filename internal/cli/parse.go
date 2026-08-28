@@ -16,8 +16,12 @@ const (
 type GlobalOptions struct {
 	ConfigPaths []string
 	Directory   string
-	Project     string
-	Output      OutputFormat
+	// DirectoryExplicit distinguishes a -C the caller wrote from the default
+	// working directory. For most commands that difference does not matter;
+	// for `kranz mcp` it decides whether the launch pins to one project.
+	DirectoryExplicit bool
+	Project           string
+	Output            OutputFormat
 }
 
 type Invocation struct {
@@ -164,7 +168,7 @@ func applyGlobal(options *GlobalOptions, spelling, value string) error {
 	case spelling == "-f" || spelling == "--config" || strings.HasPrefix(spelling, "--config="):
 		options.ConfigPaths = append(options.ConfigPaths, value)
 	case spelling == "-C" || spelling == "--directory" || strings.HasPrefix(spelling, "--directory="):
-		options.Directory = value
+		options.Directory, options.DirectoryExplicit = value, true
 	case spelling == "-p" || spelling == "--project" || strings.HasPrefix(spelling, "--project="):
 		options.Project = value
 	case spelling == "--output" || strings.HasPrefix(spelling, "--output="):

@@ -4,6 +4,49 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking.** `kranz mcp` is no longer bound to one project. It starts
+  without `-C`/`-p`, in any directory including one with no Kranz
+  configuration, registers no runtime of its own, and never creates a runtime
+  because a client connected. One global registration serves every project and
+  every agent.
+- **Breaking.** Every runtime-scoped MCP tool takes an optional `runtime`
+  argument. The address resolves as: explicit argument, then the `-C`/`-p`
+  pin, then the directory the MCP process was started in as a registry lookup,
+  then `runtime_required` carrying every running runtime as a candidate.
+  `runtimes` stays global and takes no `runtime`.
+- **Breaking.** `schema_version` is `2`. `session` now names the runtime that
+  answered the call rather than what the connection was bound to, and is
+  absent from answers no runtime served. `current` is gone from the runtime
+  listing. There is no transition period.
+- **Breaking.** `kranz ps` drops the `MODE` column and gains `CLIENTS`. With
+  the MCP adapter gone from the registry, the remaining modes described how a
+  runtime was launched rather than what it is.
+- `-C`, `-f`, and `-p` on `kranz mcp` are now deliberate pinning: the server
+  resolves everything to that project and refuses any other address with
+  `runtime_pinned`. Existing registrations keep working. `--attach-only` is
+  accepted and ignored.
+
+### Added
+
+- MCP `up` starts the runtime of a project that has none, and starts no
+  service. It requires `confirm: true`, and the runtime it creates is an
+  ordinary detached background process that outlives the session. No other tool
+  creates a runtime; every other tool answers `runtime_not_found` and names
+  `up`.
+- MCP `down` stops a runtime this MCP session started with `up`. Any other
+  runtime answers `not_owned`.
+- `kranz clients` lists the CLI, TUI, and MCP clients attached to each runtime,
+  with surface, label, PID, and connection age. Runtimes are listed by `ps`;
+  the clients working in them are a separate question.
+- Runtime-scoped MCP resources have an addressed form,
+  `kranz://runtimes/{runtime}/config` and so on, published through
+  `resources/templates/list`.
+- New causal codes: `runtime_required`, `runtime_pinned`, `not_owned`, and
+  `runtime_version_mismatch`, which fails one call against an incompatible
+  runtime while the process keeps serving every other one.
+
 ## [0.10.0] - 2026-08-28
 
 ### Added

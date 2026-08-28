@@ -3,25 +3,25 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kranz-org/kranz/internal/app"
 	"github.com/kranz-org/kranz/internal/config"
-	kranzruntime "github.com/kranz-org/kranz/internal/runtime"
 	"gopkg.in/yaml.v3"
 )
 
 func (s *Server) installResources() {
 	definitions := []resourceDefinition{
-		{URI: "kranz://session", Name: "session", Title: "Kranz runtime session", Description: "Runtime identity, ownership mode, protocol, and generation.", MimeType: "application/json", handler: s.sessionResource},
-		{URI: "kranz://runtimes", Name: "runtimes", Title: "Running Kranz runtimes", Description: "Registry sessions visible to this user, with the current MCP binding flagged.", MimeType: "application/json", handler: s.runtimesResource},
-		{URI: "kranz://config", Name: "config", Title: "Redacted effective configuration", Description: "Effective config and provenance paths with secret-like environment values redacted.", MimeType: "application/json", handler: s.configResource},
-		{URI: "kranz://services", Name: "services", Title: "Services", Description: "Declared services and their live runtime snapshots.", MimeType: "application/json", handler: s.servicesResource},
-		{URI: "kranz://actions", Name: "actions", Title: "Actions", Description: "Service and project actions in declaration order.", MimeType: "application/json", handler: s.actionsResource},
-		{URI: "kranz://runs", Name: "runs", Title: "Run catalog", Description: "Bounded service and action run summaries with provenance and retention state.", MimeType: "application/json", handler: s.runsResource},
-		{URI: "kranz://graph", Name: "graph", Title: "Dependency and prerequisite graph", Description: "Nodes for services, action groups, and actions, with dependency, prerequisite, and ownership edges.", MimeType: "application/json", handler: s.graphResource},
-		{URI: "kranz://tags", Name: "tags", Title: "Service tags", Description: "The shared service/tag selector index.", MimeType: "application/json", handler: s.tagsResource},
-		{URI: "kranz://capabilities", Name: "capabilities", Title: "MCP capabilities", Description: "Explicit Kranz MCP allow-list and unavailable unsafe operations.", MimeType: "application/json", handler: s.capabilitiesResource},
+		{URI: "kranz://runtimes", Name: "runtimes", Title: "Running Kranz runtimes", Description: "Registry sessions visible to this user. Global: it is the discovery primitive an unbound client reads first.", MimeType: "application/json", global: (*Server).runtimesResource},
+		{URI: "kranz://capabilities", Name: "capabilities", Title: "MCP capabilities", Description: "Explicit Kranz MCP allow-list, addressing mode, and unavailable unsafe operations.", MimeType: "application/json", global: (*Server).capabilitiesResource},
+		{URI: "kranz://session", Name: "session", Title: "Kranz runtime session", Description: "Identity, protocol, and generation of the runtime this read resolved to.", MimeType: "application/json", scoped: (*scope).sessionResource},
+		{URI: "kranz://config", Name: "config", Title: "Redacted effective configuration", Description: "Effective config and provenance paths with secret-like environment values redacted.", MimeType: "application/json", scoped: (*scope).configResource},
+		{URI: "kranz://services", Name: "services", Title: "Services", Description: "Declared services and their live runtime snapshots.", MimeType: "application/json", scoped: (*scope).servicesResource},
+		{URI: "kranz://actions", Name: "actions", Title: "Actions", Description: "Service and project actions in declaration order.", MimeType: "application/json", scoped: (*scope).actionsResource},
+		{URI: "kranz://runs", Name: "runs", Title: "Run catalog", Description: "Bounded service and action run summaries with provenance and retention state.", MimeType: "application/json", scoped: (*scope).runsResource},
+		{URI: "kranz://graph", Name: "graph", Title: "Dependency and prerequisite graph", Description: "Nodes for services, action groups, and actions, with dependency, prerequisite, and ownership edges.", MimeType: "application/json", scoped: (*scope).graphResource},
+		{URI: "kranz://tags", Name: "tags", Title: "Service tags", Description: "The shared service/tag selector index.", MimeType: "application/json", scoped: (*scope).tagsResource},
 	}
 	s.resources, s.resourceOrder = make(map[string]resourceDefinition, len(definitions)), make([]string, 0, len(definitions))
 	for _, definition := range definitions {
@@ -30,63 +30,101 @@ func (s *Server) installResources() {
 	}
 }
 
-func (s *Server) runsResource(context.Context) ResultEnvelope {
+// runtimeScopedURI is the addressed form of a short resource URI:
+// kranz://runtimes/{runtime}/config reads one named runtime, while
+// kranz://config reads whichever runtime the standard resolution order picks.
+func runtimeScopedURI(uri string) (runtime, short string, ok bool) {
+	const prefix = "kranz://runtimes/"
+	if !strings.HasPrefix(uri, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(uri, prefix)
+	name, resource, found := strings.Cut(rest, "/")
+	if !found || name == "" || resource == "" || strings.Contains(resource, "/") {
+		return "", "", false
+	}
+	return name, "kranz://" + resource, true
+}
+
+func (s *Server) resourceTemplates() []resourceTemplate {
+	templates := make([]resourceTemplate, 0, len(s.resourceOrder))
+	for _, uri := range s.resourceOrder {
+		definition := s.resources[uri]
+		if definition.scoped == nil {
+			continue
+		}
+		templates = append(templates, resourceTemplate{
+			URITemplate: "kranz://runtimes/{runtime}/" + definition.Name,
+			Name:        definition.Name,
+			Title:       definition.Title,
+			Description: definition.Description + " Reads the named runtime.",
+			MimeType:    definition.MimeType,
+		})
+	}
+	return templates
+}
+
+func (s *scope) runsResource(context.Context) ResultEnvelope {
 	return s.envelope(map[string]any{"runs": s.api.Runs(), "retention": s.api.RunRetention()})
 }
 
-func (s *Server) envelope(data any) ResultEnvelope {
-	return ResultEnvelope{SchemaVersion: SchemaVersion, Generation: s.api.Project().Generation, Session: s.session, Data: data}
+func (s *scope) envelope(data any) ResultEnvelope {
+	identity := s.session
+	return ResultEnvelope{SchemaVersion: SchemaVersion, Generation: s.api.Project().Generation, Session: &identity, Data: data}
 }
 
-func (s *Server) errorEnvelope(err error) ResultEnvelope {
+func (s *scope) errorEnvelope(err error) ResultEnvelope {
 	causal := causalError(err)
 	if causal != nil && causal.Code == "selector_not_found" {
 		selector, _ := causal.Details["selector"].(string)
 		causal.Message = fmt.Sprintf("service or tag %q was not found in runtime %q", selector, s.session.Name)
-		causal.Hint = "This MCP connection is bound to one runtime. Read kranz://runtimes before concluding the service is unavailable."
+		causal.Hint = "This answer came from one runtime. Read kranz://runtimes before concluding the service is unavailable."
 		causal.Details["current_runtime"] = s.session.Name
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		matches, discoveryErr := s.selectorMatches(ctx, selector)
+		matches, discoveryErr := s.selectorMatches(ctx, selector, s.session.ID)
 		cancel()
 		if discoveryErr == nil && len(matches) > 0 {
-			causal.Hint = fmt.Sprintf("This selector matches another running runtime. This MCP connection remains bound to %q; register or attach an MCP server with -p for the matching runtime.", s.session.Name)
+			causal.Hint = fmt.Sprintf("This selector matches another running runtime; %q does not have it. Repeat the call with the runtime argument from available_in.", s.session.Name)
+			if s.resolver != nil && s.resolver.Pinned() {
+				// Telling a pinned connection to retry elsewhere would be
+				// advice it cannot follow.
+				causal.Hint = fmt.Sprintf("This selector matches another running runtime, and this MCP server is pinned to %q. Reach it from an unpinned server, or from the CLI with -p.", s.session.Name)
+			}
 			causal.Details["available_in"] = matches
 		}
 	}
-	return ResultEnvelope{SchemaVersion: SchemaVersion, Generation: s.api.Project().Generation, Session: s.session, Error: causal}
+	identity := s.session
+	return ResultEnvelope{SchemaVersion: SchemaVersion, Generation: s.api.Project().Generation, Session: &identity, Error: causal}
 }
 
-func (s *Server) sessionResource(context.Context) ResultEnvelope {
+func (s *scope) sessionResource(context.Context) ResultEnvelope {
 	project := s.api.Project()
-	data := map[string]any{"identity": s.session, "generation": project.Generation, "loaded_at": project.LoadedAt, "last_reload_error": project.LastReloadError}
-	if s.session.OwnerReason != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		entries, err := s.runtimeEntries(ctx)
-		cancel()
-		if err == nil {
-			others := make([]RuntimeEntry, 0)
-			for _, entry := range entries {
-				if !entry.Current && entry.State == kranzruntime.SessionRunning {
-					others = append(others, entry)
-				}
-			}
-			if len(others) > 0 {
-				data["owner_hint"] = map[string]any{"message": "MCP created the selected runtime because it was missing; other runtimes were already running.", "other_running_runtimes": others}
-			}
-		}
-	}
-	return s.envelope(data)
+	return s.envelope(map[string]any{
+		"identity": s.session, "generation": project.Generation,
+		"loaded_at": project.LoadedAt, "last_reload_error": project.LastReloadError,
+	})
 }
 
+// runtimesResource is answered by the MCP process, not by a runtime. It is the
+// discovery primitive an unbound client reads first, so it must work before
+// any runtime has been addressed.
 func (s *Server) runtimesResource(ctx context.Context) ResultEnvelope {
 	entries, err := s.runtimeEntries(ctx)
 	if err != nil {
-		return s.errorEnvelope(err)
+		return s.globalError(causalError(err))
 	}
-	return s.envelope(map[string]any{"runtimes": entries})
+	return s.globalEnvelope(s.runtimesPayload(entries))
 }
 
-func (s *Server) configResource(context.Context) ResultEnvelope {
+func (s *Server) runtimesPayload(entries []RuntimeEntry) map[string]any {
+	payload := map[string]any{"runtimes": entries}
+	if s.resolver != nil && s.resolver.Pinned() {
+		payload["pinned_runtime"] = s.resolver.pin
+	}
+	return payload
+}
+
+func (s *scope) configResource(context.Context) ResultEnvelope {
 	redacted, err := s.api.RedactedConfig()
 	if err != nil {
 		return s.errorEnvelope(err)
@@ -132,7 +170,7 @@ type serviceResourceEntry struct {
 	PrimaryAction  string              `json:"primary_action,omitempty"`
 }
 
-func (s *Server) servicesResource(context.Context) ResultEnvelope {
+func (s *scope) servicesResource(context.Context) ResultEnvelope {
 	services := s.api.Services()
 	entries := make([]serviceResourceEntry, 0, len(services))
 	for _, service := range services {
@@ -172,11 +210,11 @@ type actionResourceEntry struct {
 	State            app.ActionResult `json:"state"`
 }
 
-func (s *Server) actionsResource(context.Context) ResultEnvelope {
+func (s *scope) actionsResource(context.Context) ResultEnvelope {
 	return s.envelope(s.actionEntries(""))
 }
 
-func (s *Server) actionEntries(owner string) []actionResourceEntry {
+func (s *scope) actionEntries(owner string) []actionResourceEntry {
 	cfg := s.api.Config()
 	entries := make([]actionResourceEntry, 0, len(cfg.ActionIDs()))
 	for _, id := range cfg.ActionIDs() {
@@ -201,11 +239,11 @@ func actionOwnerDescription(cfg *config.Config, id config.ActionID) string {
 	}
 }
 
-func (s *Server) graphResource(context.Context) ResultEnvelope {
+func (s *scope) graphResource(context.Context) ResultEnvelope {
 	return s.envelope(s.api.Graph())
 }
 
-func (s *Server) tagsResource(context.Context) ResultEnvelope {
+func (s *scope) tagsResource(context.Context) ResultEnvelope {
 	cfg := s.api.Config()
 	index := make(map[string][]string)
 	for _, tag := range cfg.GetAllTags() {
@@ -216,9 +254,17 @@ func (s *Server) tagsResource(context.Context) ResultEnvelope {
 }
 
 func (s *Server) capabilitiesResource(context.Context) ResultEnvelope {
-	return s.envelope(map[string]any{
-		"transport": "stdio", "connection_mode": s.session.ConnectionMode,
+	addressing := "per_call"
+	if s.resolver != nil && s.resolver.Pinned() {
+		addressing = "pinned"
+	}
+	return s.globalEnvelope(map[string]any{
+		"transport": "stdio", "addressing": addressing,
 		"resources": append([]string(nil), s.resourceOrder...), "tools": append([]string(nil), s.toolOrder...),
-		"unavailable": []string{"toggle", "StopAll", "ForceStartServices", "ForceStopServices", "Shutdown", "down", "down --force", "ReleaseExternalPort", "external PID management", "arbitrary shell execution", "interactive actions", "interactive leases", "test-only app.API methods", "generic dispatch"},
+		"resource_templates": s.resourceTemplates(),
+		"unavailable": []string{"toggle", "StopAll", "ForceStartServices", "ForceStopServices", "Shutdown",
+			"down for a runtime this MCP process did not start", "down --force", "ReleaseExternalPort",
+			"external PID management", "arbitrary shell execution", "interactive actions", "interactive leases",
+			"test-only app.API methods", "generic dispatch"},
 	})
 }

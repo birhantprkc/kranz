@@ -29,10 +29,13 @@ supervisor.
 
 ```console
 $ kranz ps
-ID        NAME      PROJECT  MODE        SERVICES  STATE    UPTIME
-7fa21c8d  shop-dev  Shop     background  4/4       running  18m
-91bc430a  billing   Billing  tui         3/3       running  6m
+ID        NAME      PROJECT  SERVICES  CLIENTS  STATE    UPTIME
+7fa21c8d  shop-dev  Shop     4/4       1        running  18m
+91bc430a  billing   Billing  3/3       2        running  6m
 ```
+
+`clients` answers the other half: who is attached to those runtimes, whether
+that is a TUI, a CLI command, or a coding agent over MCP.
 
 `status` describes the services of one runtime:
 
