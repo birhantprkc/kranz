@@ -91,7 +91,7 @@ func newMCPResolver(options kranzcli.GlobalOptions) (*kranzmcp.Resolver, error) 
 			}
 			return client, client.Close, nil
 		},
-		Launch: func(ctx context.Context, directory string) (kranzruntime.SessionRecord, error) {
+		Launch: func(ctx context.Context, directory string) (kranzruntime.SessionRecord, bool, error) {
 			return launchDetachedRuntime(ctx, options, directory)
 		},
 	}), nil
@@ -117,11 +117,12 @@ func mcpClientLabel() string {
 // launchDetachedRuntime starts a runtime the same way `kranz up -d --no-start`
 // does, in its own process. The MCP process must not host a supervisor: it
 // serves many projects, a hosted runtime would tie it to one directory, and an
-// agent disconnecting would take the project down with it.
-func launchDetachedRuntime(ctx context.Context, options kranzcli.GlobalOptions, directory string) (kranzruntime.SessionRecord, error) {
+// agent disconnecting would take the project down with it. The bool distinguishes
+// a process spawned here from an already-running runtime returned by discovery.
+func launchDetachedRuntime(ctx context.Context, options kranzcli.GlobalOptions, directory string) (kranzruntime.SessionRecord, bool, error) {
 	registry, err := kranzruntime.DefaultRegistry()
 	if err != nil {
-		return kranzruntime.SessionRecord{}, err
+		return kranzruntime.SessionRecord{}, false, err
 	}
 	target := options
 	target.Directory = directory
@@ -129,13 +130,14 @@ func launchDetachedRuntime(ctx context.Context, options kranzcli.GlobalOptions, 
 	target.Project = ""
 	name, err := runtimeNameFromDirectory(target)
 	if err != nil {
-		return kranzruntime.SessionRecord{}, err
+		return kranzruntime.SessionRecord{}, false, err
 	}
 	if record, resolveErr := registry.Resolve(ctx, name, version); resolveErr == nil && record.State == kranzruntime.SessionRunning {
-		return record, nil
+		return record, false, nil
 	}
 	if err := spawnBackground(target, nil, true, io.Discard); err != nil {
-		return kranzruntime.SessionRecord{}, err
+		return kranzruntime.SessionRecord{}, false, err
 	}
-	return registry.Resolve(ctx, name, version)
+	record, err := registry.Resolve(ctx, name, version)
+	return record, err == nil, err
 }

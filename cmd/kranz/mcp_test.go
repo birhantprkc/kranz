@@ -345,6 +345,21 @@ func TestMCPPinRefusesAnyOtherRuntime(t *testing.T) {
 	}
 }
 
+func TestMCPPinCannotBeEscapedWhileItsRuntimeIsStopped(t *testing.T) {
+	pinned, pinnedName := writeMCPProject(t)
+	other, otherName := writeMCPProject(t)
+	startTestRuntime(t, other, otherName)
+
+	session := startMCPSession(t, pinned)
+	envelope := session.callTool("status", map[string]any{"runtime": otherName})
+	if envelope.Error == nil || envelope.Error.Code != "runtime_pinned" {
+		t.Fatalf("stopped pin allowed another runtime: %#v", envelope)
+	}
+	if pinnedResult := session.callTool("status", map[string]any{"runtime": pinnedName}); pinnedResult.Error == nil || pinnedResult.Error.Code != "runtime_not_found" {
+		t.Fatalf("the pinned runtime did not report its own stopped state: %#v", pinnedResult)
+	}
+}
+
 func TestMCPUpStartsARuntimeWithoutServicesAndOutlivesTheSession(t *testing.T) {
 	options, name := writeMCPProject(t)
 	useHelperBackgroundRuntimes(t)
@@ -399,6 +414,36 @@ func TestMCPDownRefusesARuntimeItDidNotStart(t *testing.T) {
 	}
 	if _, err := registry.Resolve(context.Background(), name, version); err != nil {
 		t.Fatalf("refused down stopped the runtime anyway: %v", err)
+	}
+}
+
+func TestMCPUpDoesNotClaimAnAlreadyRunningRuntime(t *testing.T) {
+	options, name := writeMCPProject(t)
+	startTestRuntime(t, options, name)
+	session := startMCPSession(t, options)
+
+	up := session.callTool("up", map[string]any{"confirm": true})
+	if up.Error != nil {
+		t.Fatalf("up against an existing runtime = %s", envelopeDetails(t, up))
+	}
+	if up.Session != nil || up.Generation != 0 {
+		t.Fatalf("global up claimed a runtime served it: %#v", up)
+	}
+	data := up.Data.(map[string]any)
+	if created, _ := data["created"].(bool); created {
+		t.Fatalf("up claimed it created an existing runtime: %#v", up.Data)
+	}
+	down := session.callTool("down", map[string]any{"runtime": name, "confirm": true})
+	if down.Error == nil || down.Error.Code != "not_owned" {
+		t.Fatalf("up granted ownership of an existing runtime: %#v", down)
+	}
+
+	registry, err := kranzruntime.DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Resolve(context.Background(), name, version); err != nil {
+		t.Fatalf("refused down stopped the existing runtime: %v", err)
 	}
 }
 

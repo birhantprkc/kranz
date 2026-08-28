@@ -42,11 +42,11 @@ func (s *Server) upTool(ctx context.Context, raw json.RawMessage) ResultEnvelope
 		return s.globalError(causal)
 	}
 	identity := resolved.session
-	return ResultEnvelope{SchemaVersion: SchemaVersion, Session: &identity, Data: map[string]any{
+	return s.globalEnvelope(map[string]any{
 		"created": created, "runtime": identity.Name, "id": identity.ID,
 		"services_started": 0,
 		"note":             "The runtime is up with no services running. Start services explicitly with start.",
-	}}
+	})
 }
 
 // downTool refuses any runtime this process did not create. A TUI someone is

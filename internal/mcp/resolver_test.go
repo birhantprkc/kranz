@@ -115,6 +115,19 @@ func TestPinnedServerRefusesAnotherAddress(t *testing.T) {
 	}
 }
 
+func TestUnavailablePinStillRefusesAnotherAddress(t *testing.T) {
+	server := resolverServer(t, ResolverOptions{Pin: "alpha"}, fakeRecord("id-beta", "beta"))
+
+	envelope := testTool(t, server, "status", `{"runtime":"beta"}`)
+	if envelope.Error == nil || envelope.Error.Code != "runtime_pinned" {
+		t.Fatalf("unavailable pin allowed another runtime: %#v", envelope)
+	}
+	pinned := testTool(t, server, "status", `{"runtime":"alpha"}`)
+	if pinned.Error == nil || pinned.Error.Code != "runtime_not_found" {
+		t.Fatalf("the pinned address itself did not reach normal resolution: %#v", pinned)
+	}
+}
+
 // An incompatible runtime is one runtime's problem. The process serving three
 // others must keep serving them.
 func TestVersionMismatchFailsOneCallAndNotTheProcess(t *testing.T) {
@@ -155,9 +168,9 @@ func TestUpCreatesNothingWithoutConfirmationAndDownRefusesForeignRuntimes(t *tes
 	launched := 0
 	options := ResolverOptions{
 		ProjectDirectory: "/tmp/alpha",
-		Launch: func(context.Context, string) (kranzruntime.SessionRecord, error) {
+		Launch: func(context.Context, string) (kranzruntime.SessionRecord, bool, error) {
 			launched++
-			return fakeRecord("id-alpha", "alpha"), nil
+			return fakeRecord("id-alpha", "alpha"), true, nil
 		},
 	}
 	server := resolverServer(t, options, fakeRecord("id-beta", "beta"))
@@ -171,6 +184,8 @@ func TestUpCreatesNothingWithoutConfirmationAndDownRefusesForeignRuntimes(t *tes
 	}
 	if envelope := testTool(t, server, "up", `{"confirm":true}`); envelope.Error != nil {
 		t.Fatalf("up = %#v", envelope.Error)
+	} else if envelope.Session != nil || envelope.Generation != 0 {
+		t.Fatalf("global up claimed a runtime served it: %#v", envelope)
 	}
 	if launched != 1 {
 		t.Fatalf("launches = %d", launched)
@@ -179,6 +194,29 @@ func TestUpCreatesNothingWithoutConfirmationAndDownRefusesForeignRuntimes(t *tes
 	// beta was found, not created here, so it is not this session's to stop.
 	if envelope := testTool(t, server, "down", `{"runtime":"beta","confirm":true}`); envelope.Error == nil || envelope.Error.Code != "not_owned" {
 		t.Fatalf("down on a foreign runtime = %#v", envelope)
+	}
+}
+
+func TestUpDoesNotClaimAnExistingRuntime(t *testing.T) {
+	alpha := fakeRecord("id-alpha", "alpha")
+	options := ResolverOptions{
+		ProjectDirectory: "/tmp/alpha",
+		Launch: func(context.Context, string) (kranzruntime.SessionRecord, bool, error) {
+			return alpha, false, nil
+		},
+	}
+	server := resolverServer(t, options, alpha)
+
+	up := testTool(t, server, "up", `{"confirm":true}`)
+	if up.Error != nil {
+		t.Fatalf("up against an existing runtime = %#v", up.Error)
+	}
+	data := up.Data.(map[string]any)
+	if created, _ := data["created"].(bool); created {
+		t.Fatalf("up claimed it created an existing runtime: %#v", up.Data)
+	}
+	if down := testTool(t, server, "down", `{"runtime":"alpha","confirm":true}`); down.Error == nil || down.Error.Code != "not_owned" {
+		t.Fatalf("up granted ownership of an existing runtime: %#v", down)
 	}
 }
 

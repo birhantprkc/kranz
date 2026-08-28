@@ -24,8 +24,10 @@ type Dialer func(ctx context.Context, record kranzruntime.SessionRecord) (app.AP
 // Launcher starts a runtime for a project directory and returns the record it
 // published. It is the only way an MCP process may bring a runtime into
 // existence, and it is wired to a detached child process rather than to an
-// in-process supervisor: this process is a client of runtimes, never one.
-type Launcher func(ctx context.Context, directory string) (kranzruntime.SessionRecord, error)
+// in-process supervisor: this process is a client of runtimes, never one. The
+// bool reports whether this call actually created the returned runtime; finding
+// an already-running one must not grant ownership to the MCP process.
+type Launcher func(ctx context.Context, directory string) (kranzruntime.SessionRecord, bool, error)
 
 // Resolver turns the optional runtime argument of a tool call into a live
 // client. One MCP process serves any number of runtimes, so the binding that
@@ -154,7 +156,19 @@ func (r *Resolver) checkPin(ctx context.Context, requested string) *CausalError 
 	}
 	pinned, err := r.resolveRecord(ctx, r.pin)
 	if err != nil {
-		return nil // the pin itself is unreachable; report that from the connect path
+		// A missing pin still constrains the server. Only the same literal
+		// reference may continue to the connect path and report that the pinned
+		// runtime is not running; another address must not turn an unavailable
+		// pin into an unbound server.
+		if strings.EqualFold(r.pin, requested) {
+			return nil
+		}
+		return &CausalError{
+			Code:    "runtime_pinned",
+			Message: fmt.Sprintf("this MCP server is pinned to runtime %q and cannot address %q", r.pin, requested),
+			Hint:    "Register a second MCP server without -C/-p to address runtimes per call, or drop the runtime argument.",
+			Details: map[string]any{"pinned_runtime": r.pin, "requested": requested},
+		}
 	}
 	if matchesRecord(pinned, requested) {
 		return nil
@@ -336,7 +350,7 @@ func (r *Resolver) Launch(ctx context.Context, directory string) (*runtimeScope,
 	if r.launch == nil {
 		return nil, false, &CausalError{Code: "unsupported", Message: "this MCP server cannot start runtimes"}
 	}
-	record, err := r.launch(ctx, directory)
+	record, created, err := r.launch(ctx, directory)
 	if err != nil {
 		var conflict *kranzruntime.SessionConflictError
 		if errors.As(err, &conflict) {
@@ -347,14 +361,18 @@ func (r *Resolver) Launch(ctx context.Context, directory string) (*runtimeScope,
 			Hint: "Run doctor in that project, or start it from a terminal to read the failure.", Details: map[string]any{"directory": directory}}
 	}
 	r.mu.Lock()
-	created := !r.created[record.ID]
-	r.created[record.ID] = true
+	if created {
+		r.created[record.ID] = true
+	}
+	createdHere := r.created[record.ID]
 	r.mu.Unlock()
 	scope, causal := r.connectRecord(ctx, record)
 	if causal != nil {
 		return nil, created, causal
 	}
-	scope.session.CreatedBy = "mcp"
+	if createdHere {
+		scope.session.CreatedBy = "mcp"
+	}
 	return scope, created, nil
 }
 
