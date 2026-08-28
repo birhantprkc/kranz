@@ -27,8 +27,8 @@ features:
     details: Separate readiness, liveness, lifecycle status, runtime port discovery, and explicit unknown state.
   - title: Operations beside services
     details: Run migrations, builds, checks, and project actions with captured output, timeout, and confirmation.
-  - title: One runtime for people and agents
-    details: Let coding agents inspect and operate the same live session through the built-in MCP server.
+  - title: One MCP server, shared live runtimes
+    details: Register once, address any project per call, and let agents operate the same supervisor visible in TUI and CLI.
   - title: Bring your existing config
     details: Start with a Procfile, a supported Process Compose file, or native Kranz YAML when you need the full model.
   - title: Foreground by design
@@ -37,7 +37,7 @@ features:
 
 <div class="demo-frame demo-frame--hero">
 
-![Kranz starting the MoonFlight project: shared infrastructure, a migration, two APIs behind a gateway, a web front end, and two workers](./assets/kranz-demo.gif)
+![Kranz v0.11.0 starting the MoonFlight project: shared infrastructure, a migration, two APIs behind a gateway, a web front end, and two workers](./assets/kranz-demo.gif)
 
 </div>
 

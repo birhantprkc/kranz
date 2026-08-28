@@ -1,6 +1,6 @@
 # The site hero, recorded from the MoonFlight showcase project.
-# Regenerate from the repository root with a 0.7.0 binary in ./bin:
-#   make build VERSION=v0.7.0 && vhs docs/assets/tapes/kranz-demo.tape
+# Regenerate from the repository root with the release binary in ./bin:
+#   make build VERSION=v0.11.0 && vhs docs/assets/tapes/kranz-demo.tape
 Output docs/assets/kranz-demo.gif
 
 Set Shell "bash"
@@ -11,7 +11,7 @@ Set Padding 16
 Set LineHeight 1.2
 
 Hide
-Type "cd examples/moonflight && export PATH=$PWD/../../bin:$PATH && rm -rf .kranz-demo && clear"
+Type "cd examples/moonflight && unset NO_COLOR && export TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 PATH=$PWD/../../bin:$PATH && rm -rf .kranz-demo && clear"
 Enter
 Sleep 1s
 Show

@@ -11,8 +11,10 @@ class Client:
     def __init__(self):
         binary = os.environ.get("KRANZ_BIN", "kranz")
         project_dir = os.environ.get("KRANZ_PROJECT_DIR", os.path.dirname(__file__))
+        self.runtime = os.environ.get("KRANZ_RUNTIME")
         self.process = subprocess.Popen(
-            [binary, "mcp", "-C", project_dir],
+            [binary, "mcp"],
+            cwd=project_dir,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=sys.stderr,
@@ -38,6 +40,9 @@ class Client:
         self.process.stdin.flush()
 
     def tool(self, name, arguments):
+        arguments = dict(arguments)
+        if self.runtime and name not in ("runtimes", "up", "down"):
+            arguments["runtime"] = self.runtime
         result = self.request("tools/call", {"name": name, "arguments": arguments})["structuredContent"]
         error = result.get("error")
         if error and error["code"] == "confirmation_required":
@@ -47,6 +52,8 @@ class Client:
         return result
 
     def resource(self, uri):
+        if self.runtime and uri.startswith("kranz://") and uri not in ("kranz://runtimes", "kranz://capabilities"):
+            uri = "kranz://runtimes/" + self.runtime + "/" + uri.removeprefix("kranz://")
         result = self.request("resources/read", {"uri": uri})
         return json.loads(result["contents"][0]["text"])
 
@@ -63,7 +70,7 @@ def main():
             session = client.resource("kranz://session")
             status = client.tool("status", {"selectors": ["api"]})
             service = status["data"][0]
-            print(f"mode={session['session']['connection_mode']} session={session['session']['id'][:8]}")
+            print(f"runtime={session['session']['name']} session={session['session']['id'][:8]}")
             print(f"api {service['state']['status']} pid={service['state']['pid']}")
         elif command == "logs":
             result = client.tool("logs", {"selectors": ["api"], "tail": 4})
@@ -88,7 +95,7 @@ def main():
         elif command == "actions":
             session = client.resource("kranz://session")
             actions = client.tool("action_list", {})
-            print(f"mode={session['session']['connection_mode']} session={session['session']['id'][:8]}")
+            print(f"runtime={session['session']['name']} session={session['session']['id'][:8]}")
             for action in actions["data"]:
                 print(action["id"])
         elif command == "demo":
@@ -96,7 +103,7 @@ def main():
             print(f"MCP initialize                         -> {protocol}")
             session = client.resource("kranz://session")
             print("MCP resource kranz://session           "
-                  f"-> {session['session']['connection_mode']} {session['session']['id'][:8]}")
+                  f"-> {session['session']['name']} {session['session']['id'][:8]}")
             status = client.tool("status", {"selectors": ["api"]})["data"][0]
             print("MCP tool status {selectors: [api]}     "
                   f"-> {status['state']['status']}, ready")

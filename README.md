@@ -25,12 +25,12 @@ processes you would otherwise spread across terminal tabs, alongside Docker
 Compose when containers remain the right home for infrastructure.
 
 <p align="center">
-  <img src="docs/assets/kranz-demo.gif" alt="Kranz terminal interface">
+  <img src="docs/assets/kranz-demo.gif" alt="Kranz v0.11.0 terminal interface starting the MoonFlight service graph">
 </p>
 
 ## TUI, CLI, and MCP
 
-Kranz exposes one runtime through three views:
+Kranz exposes each runtime through three views:
 
 - **TUI** — the keyboard-first operator view for services, details, logs,
   lifecycle plans, actions, health history, and notifications;
@@ -40,13 +40,14 @@ Kranz exposes one runtime through three views:
 They use the same supervisor. A service restarted by a command or coding agent
 changes immediately in the open TUI; none of these views starts a second stack.
 
-### Coding agents join your live session
+### Coding agents join your live runtimes
 
 Kranz MCP gives a coding agent the same services, actions, readiness, ports,
 bounded logs, and numbered run history visible in the TUI. It attaches to the
 existing runtimes instead of starting a second development stack.
 
-- **One runtime** — TUI, CLI, and MCP use the same supervisor.
+- **Shared runtimes** — TUI, CLI, and MCP converge on the supervisor of the
+  project addressed by each call.
 - **One view of the project** — the same selectors, action runs, and logs.
 - **Clear ownership** — disconnecting an attached agent does not stop the stack.
 

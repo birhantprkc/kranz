@@ -1,14 +1,14 @@
 # MCP demo smoke evidence
 
-Recorded: 2026-08-24 on macOS arm64 with the working-tree `./bin/kranz`.
+Recorded: 2026-08-28 on macOS arm64 with the v0.11.0 release candidate.
 
 The deterministic client in `examples/mcp-shared-runtime/mcp_client.py` started
 `kranz mcp`, negotiated MCP `2025-11-25`, and used only resource/tool calls.
 Against one live background runtime it observed:
 
 ```text
-mode=attached session=1b833936
-api running pid=92375
+runtime=mcp-shared-runtime session=ef40fcc5
+api running pid=45298
 api stderr: database connection refused; retrying
 restart targets=api,web,worker
 api ready pid=92403

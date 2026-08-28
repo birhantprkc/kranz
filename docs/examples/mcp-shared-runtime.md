@@ -15,7 +15,7 @@ runs one action, reads its numbered result again, and cleans up the session.
 From the repository root, build Kranz first:
 
 ```bash
-make build VERSION=v0.9.0
+make build VERSION=v0.11.0
 cd examples/mcp-shared-runtime
 ```
 
@@ -30,16 +30,18 @@ KRANZ_BIN=../../bin/kranz python3 mcp_client.py migrate
 ../../bin/kranz down
 ```
 
-The views report one session identity. The action result and logs use the same
+The views report one runtime identity. The action result and logs use the same
 `OWNER/ACTION#run`; the client's second result read does not execute the action
 again. Closing an MCP client attached to the TUI-owned runtime leaves the TUI
 and services running.
 
-Point the same minimal client at another project with absolute paths:
+The client starts one unbound `kranz mcp` process. Point a call at another live
+runtime by passing its name from `runtimes`:
 
 ```bash
 KRANZ_BIN=/path/to/kranz \
-KRANZ_PROJECT_DIR=/path/to/project \
+KRANZ_PROJECT_DIR=/path/to/any/directory \
+KRANZ_RUNTIME=another-runtime \
 python3 mcp_client.py actions
 ```
 
@@ -61,7 +63,7 @@ The recording is built from the same live client and project, with no fixture
 JSON or personal environment data:
 
 ```bash
-make build VERSION=v0.9.0
+make build VERSION=v0.11.0
 vhs docs/assets/tapes/mcp-shared-runtime.tape
 ```
 
