@@ -15,7 +15,7 @@ import (
 // resumes afterwards without disturbing managed services.
 
 func (m *Model) openCommandShell() tea.Cmd {
-	command, cleanup, err := commandShell()
+	command, cleanup, err := commandShellInDirectory(m.workingDirectory)
 	if err != nil {
 		return func() tea.Msg { return shellFinishedMsg{err: err} }
 	}
@@ -26,7 +26,12 @@ func (m *Model) openCommandShell() tea.Cmd {
 	})
 }
 
-func commandShell() (*exec.Cmd, func(), error) {
+// commandShellInDirectory builds the interactive shell handed the terminal
+// by Ctrl+O. An empty directory inherits the process's own working
+// directory; the dashboard always passes the current runtime's project
+// directory, which is not the process's own once the TUI has switched
+// runtimes.
+func commandShellInDirectory(directory string) (*exec.Cmd, func(), error) {
 	shell := strings.TrimSpace(os.Getenv("SHELL"))
 	if shell == "" {
 		shell = "/bin/sh"
@@ -83,6 +88,9 @@ func commandShell() (*exec.Cmd, func(), error) {
 		command = exec.Command(resolved, "-C", "bind \\co exit", "-i")
 	default:
 		command = exec.Command(resolved, "-i")
+	}
+	if directory != "" {
+		command.Dir = directory
 	}
 	return command, cleanup, nil
 }
