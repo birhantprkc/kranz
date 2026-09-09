@@ -17,7 +17,7 @@ one-shot coordinate instead of repeating a flag:
 
 ```bash
 KRANZ_PROJECT=shop-dev kranz status
-KRANZ_DIRECTORY=/work/shop kranz list services
+KRANZ_DIRECTORY=/work/shop kranz services
 ```
 
 The equivalent `-p` and `-C` flags remain available and take precedence over
@@ -26,19 +26,21 @@ the environment.
 ## Start a project and leave it running
 
 ```console
-$ kranz up -d
+$ kranz up --start -d
 Started shop-dev (7fa21c8d), PID 18421.
 ```
 
-`up -d` creates a background runtime for this project and gives you the prompt
-back. The processes belong to that runtime, not to your shell, so closing the
-terminal leaves them alone.
+`up --start -d` creates a background runtime, starts every enabled service, and
+gives you the prompt back. The processes belong to that runtime, not to your
+shell, so closing the terminal leaves them alone. Use `up -d` without
+`--start` when you want an empty runtime and will start services explicitly.
 
-Without `-d`, `up` keeps a foreground client attached and streams every
-service's output with a prefix. The runtime supervisor is still a separate
-process; `Ctrl+C` explicitly asks it to shut down before the foreground client
-terminates. This is the shape you want inside a container or under another
-supervisor.
+Without `-d`, `up` keeps a foreground client attached. Selectors start and
+stream only the named services; `--start` starts and streams every enabled
+service; bare `up` starts none. The runtime supervisor is still a separate
+process, and `Ctrl+C` explicitly asks it to shut down before the foreground
+client terminates. This is the shape you want inside a container or under
+another supervisor.
 
 ## See what is running
 
@@ -46,9 +48,9 @@ supervisor.
 
 ```console
 $ kranz ps
-ID        NAME      PROJECT  SERVICES  CLIENTS  STATE    UPTIME
-7fa21c8d  shop-dev  Shop     4/4       1        running  18m
-91bc430a  billing   Billing  3/3       2        running  6m
+ID        PID    NAME      PROJECT  SERVICES  CLIENTS  STATE    UPTIME
+7fa21c8d  18400  shop-dev  Shop     4/4       1        running  18m
+91bc430a  18022  billing   Billing  3/3       2        running  6m
 ```
 
 `clients` answers the other half: who is attached to those runtimes, whether
@@ -67,6 +69,15 @@ worker   running  -       18m     26085  -
 `HEALTH` is `-` when no readiness or liveness probe is configured. Kranz does
 not turn the internal assumption that a missing probe permits startup into a
 false claim that a probe passed.
+
+Use exact filters to narrow live tables, and `--watch` to follow changes. A
+bounded watch is convenient in automation:
+
+```bash
+kranz ps --filter client=mcp
+kranz clients --filter client=tui,mcp --watch --count 3
+kranz status api --filter state=running,unhealthy --watch --interval 2s
+```
 
 ## Act on services
 
@@ -106,7 +117,7 @@ kranz logs --since 5m
 Logs survive the service. A worker that crashed two minutes ago still answers
 `kranz logs worker`, which is when you actually need it.
 
-Actions keep their own history under the same name `kranz action run` uses, so
+Actions keep their own history under the same name `kranz actions run` uses, so
 an action that has already finished can be read again without running it twice:
 
 ```bash
@@ -152,7 +163,7 @@ service answers to is tried as a tag. `kranz plan api`, `kranz status api` and
 `kranz stop api` therefore always cover the same services.
 
 Actions extend the rule rather than change it: `OWNER/ACTION` addresses one
-action, using the same name `kranz action run` uses. Because of that, a service
+action, using the same name `kranz actions run` uses. Because of that, a service
 and an action group may not share a name — the actions under the second one
 would be unreachable — and `kranz config check` rejects a project that tries.
 
@@ -208,7 +219,7 @@ started:
 kranz config check
 kranz doctor
 kranz plan
-kranz list services
+kranz services
 kranz ports
 ```
 

@@ -87,59 +87,106 @@ type Command struct {
 	Default string
 
 	// Planned marks a command whose grammar is reserved but whose execution a
-	// later feature stream still has to attach. Help lists planned commands
+	// future change still has to attach. Help lists planned commands
 	// apart from working ones and the dispatcher refuses them, so the tree
 	// stays the single place that decides which surface actually exists.
 	Planned bool
 }
 
-// DefaultTree returns the complete v0.8 command vocabulary. Feature streams
-// attach execution to these nodes incrementally; reserving the grammar here
-// keeps unknown-command handling, help, and future completions deterministic.
-// A stream that implements a command clears its Planned flag in the same
-// change, which is what moves the command into the working help section.
+// DefaultTree returns the command vocabulary implemented by this build.
+// Reserving future grammar here is optional; a command marked Planned stays
+// out of completions and is clearly separated in help until implemented.
 func DefaultTree() *Command {
 	return &Command{Name: "kranz", Summary: "a local service orchestrator", Children: []*Command{
-		{Name: "init", Summary: "create a Kranz configuration", Usage: "kranz init [--from PATH] [--project NAME] [--service NAME] [--command COMMAND] [-o PATH] [-y|--yes]", Options: []Option{
-			{Flags: "--from PATH", Summary: "convert an existing Procfile or compose file"},
-			{Flags: "--project NAME", Summary: "project name to write"},
+		{Name: "init", Summary: "author a Kranz configuration", Usage: "kranz init [DIRECTORY] [--from PATH] [--name NAME] [--service NAME] [--command COMMAND] [-o PATH] [-y|--yes] [--force]", Options: []Option{
+			{Flags: "--from PATH", Summary: "explicitly convert an existing Procfile or compose file"},
+			{Flags: "--name NAME", Summary: "project name to write"},
 			{Flags: "--service NAME", Summary: "name of the first service"},
 			{Flags: "--command COMMAND", Summary: "command that first service runs"},
 			{Flags: "-o, --output-file PATH", Summary: "file to write; defaults to kranz.yaml"},
-			{Flags: "-y, --yes", Summary: "answer every prompt yes, overwriting any file"},
+			{Flags: "-y, --yes", Summary: "write a fully specified non-interactive configuration"},
+			{Flags: "--force", Summary: "replace an existing file in non-interactive mode"},
 		}},
 		{Name: "config", Summary: "inspect effective configuration", Default: "show", Children: []*Command{
 			{Name: "check", Summary: "load and validate configuration"},
 			{Name: "show", Summary: "print redacted effective configuration", Usage: "kranz config show [--provenance]", Options: []Option{
 				{Flags: "--provenance", Summary: "annotate each field with the layer it came from"},
 			}},
-			{Name: "explain", Summary: "show field provenance", Usage: "kranz config explain [SERVICE] [--all]", Options: []Option{
+			{Name: "explain", Summary: "show field provenance", Usage: "kranz config explain [SERVICE] [--all] [--format TEMPLATE]", Options: []Option{
 				{Flags: "--all", Summary: "explain every service instead of one"},
+				{Flags: "--format TEMPLATE", Summary: "render each field with a Go template; prefix with 'table ' for headers"},
 			}},
 		}},
-		{Name: "doctor", Summary: "run project preflight checks"},
-		{Name: "ps", Summary: "list active project runtimes"},
-		{Name: "clients", Summary: "list clients attached to project runtimes"},
-		{Name: "list", Summary: "list services, actions, or tags", Usage: "kranz list [services|actions|tags]"},
-		{Name: "info", Summary: "show project or service details", Usage: "kranz info [SERVICE]"},
-		{Name: "status", Summary: "show runtime status", Usage: "kranz status [SELECTOR ...]"},
+		{Name: "doctor", Summary: "run project preflight checks", Usage: "kranz doctor [--format TEMPLATE]", Options: []Option{
+			{Flags: "--format TEMPLATE", Summary: "render each finding with a Go template; prefix with 'table ' for headers"},
+		}},
+		{Name: "ps", Summary: "list active project runtimes", Usage: "kranz ps [--filter KEY=VALUE] [--watch] [--interval D] [--count N] [--format TEMPLATE]", Options: []Option{
+			{Flags: "--filter KEY=VALUE", Summary: "filter by name, project, state, or client; repeatable"},
+			{Flags: "--watch", Summary: "refresh until interrupted"},
+			{Flags: "--interval D", Summary: "watch refresh interval; defaults to 1s"},
+			{Flags: "--count N", Summary: "stop watch after N snapshots"},
+			{Flags: "--format TEMPLATE", Summary: "render each runtime with a Go template; prefix with 'table ' for headers"},
+		}},
+		{Name: "clients", Summary: "list clients attached to project runtimes", Usage: "kranz clients [--filter KEY=VALUE] [--watch] [--interval D] [--count N] [--format TEMPLATE]", Options: []Option{
+			{Flags: "--filter KEY=VALUE", Summary: "filter by runtime, project, client, surface, or label; repeatable"},
+			{Flags: "--watch", Summary: "refresh until interrupted"},
+			{Flags: "--interval D", Summary: "watch refresh interval; defaults to 1s"},
+			{Flags: "--count N", Summary: "stop watch after N snapshots"},
+			{Flags: "--format TEMPLATE", Summary: "render each client with a Go template; prefix with 'table ' for headers"},
+		}},
+		{Name: "services", Summary: "inspect configured services", Default: "list", Children: []*Command{
+			{Name: "list", Summary: "list configured services", Usage: "kranz services [--format TEMPLATE]", Options: []Option{
+				{Flags: "--format TEMPLATE", Summary: "render each service with a Go template; prefix with 'table ' for headers"},
+			}},
+			{Name: "info", Summary: "show service details", Usage: "kranz services info SERVICE"},
+		}},
+		{Name: "actions", Summary: "inspect and run actions", Default: "list", Children: []*Command{
+			{Name: "list", Summary: "list actions", Usage: "kranz actions [OWNER] [--format TEMPLATE]", Options: []Option{
+				{Flags: "--format TEMPLATE", Summary: "render each action with a Go template; prefix with 'table ' for headers"},
+			}},
+			{Name: "info", Summary: "show action details", Usage: "kranz actions info OWNER/ACTION"},
+			{Name: "run", Summary: "run an action", Usage: "kranz actions run OWNER/ACTION"},
+		}},
+		{Name: "tags", Summary: "list configured service tags", Usage: "kranz tags [--format TEMPLATE]", Options: []Option{
+			{Flags: "--format TEMPLATE", Summary: "render each tag with a Go template; prefix with 'table ' for headers"},
+		}},
+		{Name: "project", Summary: "show project details", Usage: "kranz project"},
+		{Name: "status", Summary: "show runtime status", Usage: "kranz status [SELECTOR ...] [--filter KEY=VALUE] [--watch] [--interval D] [--count N] [--format TEMPLATE]", Options: []Option{
+			{Flags: "--filter KEY=VALUE", Summary: "filter selected services by name, state, or health; repeatable"},
+			{Flags: "--watch", Summary: "refresh until interrupted"},
+			{Flags: "--interval D", Summary: "watch refresh interval; defaults to 1s"},
+			{Flags: "--count N", Summary: "stop watch after N snapshots"},
+			{Flags: "--format TEMPLATE", Summary: "render each service with a Go template; prefix with 'table ' for headers"},
+		}},
 		{Name: "runs", Summary: "inspect and delete retained runs", Default: "list", Children: []*Command{
-			{Name: "list", Summary: "list retained service and action runs", Usage: "kranz runs [TARGET ...]"},
+			{Name: "list", Summary: "list retained service and action runs", Usage: "kranz runs [TARGET ...] [--limit N] [--since D] [--status STATUS] [--format TEMPLATE]", Options: []Option{
+				{Flags: "--limit N", Summary: "keep only the newest N matching runs"},
+				{Flags: "--since D", Summary: "keep runs started within a duration such as 30m or 2h"},
+				{Flags: "--status STATUS", Summary: "keep comma-separated statuses; repeatable"},
+				{Flags: "--format TEMPLATE", Summary: "render each run with a Go template; prefix with 'table ' for headers"},
+			}},
+			{Name: "retention", Summary: "show per-target run retention", Usage: "kranz runs retention [TARGET ...] [--format TEMPLATE]", Options: []Option{
+				{Flags: "--format TEMPLATE", Summary: "render each retention boundary with a Go template; prefix with 'table ' for headers"},
+			}},
 			{Name: "delete", Summary: "delete one completed run", Usage: "kranz runs delete TARGET#N --confirm", Options: []Option{
 				{Flags: "--confirm", Summary: "confirm permanent removal of the run and its retained output"},
 			}},
 		}},
-		{Name: "plan", Summary: "show the resolved start plan", Usage: "kranz plan [SELECTOR ...]"},
+		{Name: "plan", Summary: "show a resolved lifecycle plan", Usage: "kranz plan [SELECTOR ...] [--operation start|stop|restart]", Options: []Option{
+			{Flags: "--operation OPERATION", Summary: "operation to preview; defaults to start", Values: []string{"start", "stop", "restart"}},
+		}},
 		{Name: "graph", Summary: "print the dependency graph", Usage: "kranz graph [--format text|json|dot]", Options: []Option{
 			{Flags: "--format FORMAT", Summary: "text, json, or dot; defaults to text", Values: []string{"text", "json", "dot"}},
 		}},
-		{Name: "ports", Summary: "list configured and detected ports", Usage: "kranz ports [SELECTOR ...]"},
-		{Name: "port", Summary: "inspect a local port", Default: "inspect", Children: []*Command{
-			{Name: "inspect", Summary: "identify a port listener", Usage: "kranz port inspect PORT"},
+		{Name: "ports", Summary: "inspect ports", Default: "list", Children: []*Command{
+			{Name: "list", Summary: "list configured and detected ports", Usage: "kranz ports [SELECTOR ...] [--format TEMPLATE]", Options: []Option{
+				{Flags: "--format TEMPLATE", Summary: "render each port with a Go template; prefix with 'table ' for headers"},
+			}},
+			{Name: "inspect", Summary: "identify a local port listener", Usage: "kranz ports inspect PORT"},
 		}},
-		{Name: "up", Summary: "create a project runtime", Usage: "kranz up [SELECTOR ...] [-d|--detach]\n  kranz up --no-start [-d|--detach]", Options: []Option{
+		{Name: "up", Summary: "create a project runtime", Usage: "kranz up [SELECTOR ...] [-d|--detach]\n  kranz up --start [-d|--detach]", Options: []Option{
 			{Flags: "-d, --detach", Summary: "return after starting the independent runtime"},
-			{Flags: "--no-start", Summary: "create the runtime without starting any service"},
+			{Flags: "--start", Summary: "start every enabled service"},
 		}},
 		{Name: "start", Summary: "start services", Usage: "kranz start SELECTOR ..."},
 		{Name: "stop", Summary: "stop services", Usage: "kranz stop SELECTOR ..."},
@@ -149,9 +196,7 @@ func DefaultTree() *Command {
 			{Flags: "--force", Summary: "discard a runtime that no longer answers its socket"},
 		}},
 		{Name: "attach", Summary: "open the TUI for an active runtime"},
-		{Name: "mcp", Summary: "serve project runtimes over MCP stdio; global -C/-p pin it to one", Usage: "kranz mcp", Options: []Option{
-			{Flags: "--attach-only", Summary: "accepted and ignored; MCP no longer creates a runtime on connect"},
-		}},
+		{Name: "mcp", Summary: "serve project runtimes over MCP stdio; global -C/-p pin it to one", Usage: "kranz mcp"},
 		{Name: "logs", Summary: "show and clear logs", Default: "show", Children: []*Command{
 			{Name: "show", Summary: "show service and action logs", Usage: "kranz logs [SELECTOR ...] [--tail N | --all] [--since D]\n  [--run N | --runs N] [--source S] [--with-actions]\n  [--plain | --no-timestamps | --no-labels] [--follow]", Options: []Option{
 				{Flags: "--tail N", Summary: "show the last N lines; a service defaults to 50"},
@@ -170,11 +215,6 @@ func DefaultTree() *Command {
 				{Flags: "--with-actions", Summary: "clear the actions an owner has run as well"},
 				{Flags: "--force", Summary: "required to clear every buffer at once"},
 			}},
-		}},
-		{Name: "action", Summary: "inspect and run actions", Default: "list", Children: []*Command{
-			{Name: "list", Summary: "list actions", Usage: "kranz action list [OWNER]"},
-			{Name: "info", Summary: "show action details", Usage: "kranz action info OWNER/ACTION"},
-			{Name: "run", Summary: "run an action", Usage: "kranz action run OWNER/ACTION"},
 		}},
 		{Name: "completion", Summary: "generate shell completion", Usage: "kranz completion bash|zsh|fish"},
 		{Name: "help", Summary: "show command help", Usage: "kranz help [COMMAND]"},

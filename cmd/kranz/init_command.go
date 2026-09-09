@@ -2,12 +2,10 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,6 +16,10 @@ import (
 
 // stdin is a variable so tests can drive the wizard without a terminal.
 var stdin io.Reader = os.Stdin
+
+// interactiveInitWizard is replaceable in command-level tests; the model
+// itself is exercised directly without requiring a real terminal.
+var interactiveInitWizard = runInitWizard
 
 // isTerminal reports whether the wizard may prompt. It is a variable for the
 // same reason: a test needs to exercise both the interactive and the
@@ -30,18 +32,18 @@ var isTerminal = func() bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// importableSources are the configuration formats init can convert, in the
-// order it offers them.
-var importableSources = []string{"kranz.yaml", "kranz.yml", "process-compose.yaml", "process-compose.yml", "Procfile.dev", "Procfile"}
-
 type initOptions struct {
 	from       string
 	fromSet    bool
 	project    string
+	projectSet bool
 	service    string
 	command    string
+	directory  string
+	dirSet     bool
 	outputPath string
 	assumeYes  bool
+	force      bool
 }
 
 type initResult struct {
@@ -67,6 +69,8 @@ func parseInitOptions(args []string) (initOptions, error) {
 		switch {
 		case arg == "--yes" || arg == "-y":
 			options.assumeYes = true
+		case arg == "--force":
+			options.force = true
 		case arg == "--from":
 			source, err := value(&index, "--from")
 			if err != nil {
@@ -75,14 +79,21 @@ func parseInitOptions(args []string) (initOptions, error) {
 			options.from, options.fromSet = source, true
 		case strings.HasPrefix(arg, "--from="):
 			options.from, options.fromSet = strings.TrimPrefix(arg, "--from="), true
-		case arg == "--project":
-			project, err := value(&index, "--project")
+		case arg == "--name" || arg == "--project":
+			if options.projectSet {
+				return initOptions{}, &kranzcli.Error{Code: "invalid_arguments", Message: "the project name may be specified only once", Hint: "Use the canonical `--name NAME` option.", ExitCode: kranzcli.ExitUsage}
+			}
+			project, err := value(&index, arg)
 			if err != nil {
 				return initOptions{}, err
 			}
-			options.project = project
-		case strings.HasPrefix(arg, "--project="):
-			options.project = strings.TrimPrefix(arg, "--project=")
+			options.project, options.projectSet = project, true
+		case strings.HasPrefix(arg, "--name=") || strings.HasPrefix(arg, "--project="):
+			if options.projectSet {
+				return initOptions{}, &kranzcli.Error{Code: "invalid_arguments", Message: "the project name may be specified only once", Hint: "Use the canonical `--name NAME` option.", ExitCode: kranzcli.ExitUsage}
+			}
+			_, project, _ := strings.Cut(arg, "=")
+			options.project, options.projectSet = project, true
 		case arg == "--service":
 			service, err := value(&index, "--service")
 			if err != nil {
@@ -107,6 +118,8 @@ func parseInitOptions(args []string) (initOptions, error) {
 			options.outputPath = path
 		case strings.HasPrefix(arg, "--output-file="):
 			options.outputPath = strings.TrimPrefix(arg, "--output-file=")
+		case !strings.HasPrefix(arg, "-") && !options.dirSet:
+			options.directory, options.dirSet = arg, true
 		default:
 			return initOptions{}, &kranzcli.Error{
 				Code:     "unknown_option",
@@ -119,6 +132,9 @@ func parseInitOptions(args []string) (initOptions, error) {
 	if options.fromSet && options.from == "" {
 		return initOptions{}, &kranzcli.Error{Code: "missing_option_value", Message: "--from requires a path", ExitCode: kranzcli.ExitUsage}
 	}
+	if options.projectSet && options.project == "" {
+		return initOptions{}, &kranzcli.Error{Code: "missing_option_value", Message: "--name requires a project name", ExitCode: kranzcli.ExitUsage}
+	}
 	return options, nil
 }
 
@@ -127,35 +143,53 @@ func runInit(globals kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 	if err != nil {
 		return err
 	}
-	// `--project NAME` is parsed as the global runtime selector before init
-	// ever sees it. init addresses no runtime, so the global value is the
-	// project name here, which is also the spelling the CLI reference documents.
-	if options.project == "" {
-		options.project = globals.Project
+	if globals.Project != "" {
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "-p/--project addresses a runtime and is not valid for init", Hint: "Use `kranz init --name NAME` to set the new project's name.", ExitCode: kranzcli.ExitUsage}
 	}
 	directory := globals.Directory
-	target := options.outputPath
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(directory, target)
+	if options.dirSet {
+		directory = options.directory
+		if !filepath.IsAbs(directory) {
+			directory = filepath.Join(globals.Directory, directory)
+		}
+		directory = filepath.Clean(directory)
 	}
-
 	prompt := bufio.NewReader(stdin)
 	// JSON is a machine contract: prompts and the human-readable preview would
 	// corrupt the single envelope. With JSON selected, init follows the same
 	// deterministic non-interactive path as a pipe and reports any missing
 	// inputs as a structured error.
 	interactive := globals.Output == kranzcli.OutputText && isTerminal() && !options.assumeYes
-
-	document, err := buildInitDocument(directory, options, interactive, prompt, stdout)
+	wizardApproved := false
+	var document *yaml.Node
+	if interactive && !options.fromSet {
+		draft, approved, wizardErr := interactiveInitWizard(directory, options.outputPath, options, stdin, stdout)
+		if wizardErr != nil {
+			return wizardErr
+		}
+		if !approved {
+			_, _ = fmt.Fprintln(stdout, "Nothing was written.")
+			return nil
+		}
+		directory = draft.Directory
+		document, err = draft.document()
+		wizardApproved = true
+	} else {
+		document, err = buildInitDocument(directory, options)
+	}
 	if err != nil {
 		return err
+	}
+	target := options.outputPath
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(directory, target)
 	}
 	rendered, err := renderDocument(document)
 	if err != nil {
 		return err
 	}
 
-	if globals.Output == kranzcli.OutputText {
+	if globals.Output == kranzcli.OutputText && !wizardApproved {
 		// The preview is the point of the wizard: the user approves a file they
 		// have actually read, not a description of one.
 		_, _ = fmt.Fprintf(stdout, "\n%s\n%s\n", relativeTo(directory, target), strings.Repeat("-", len(relativeTo(directory, target))))
@@ -163,12 +197,12 @@ func runInit(globals kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 	}
 
 	if _, err := os.Stat(target); err == nil {
-		if !options.assumeYes {
+		if !wizardApproved && !options.force {
 			if !interactive {
 				return &kranzcli.Error{
 					Code:     "file_exists",
 					Message:  fmt.Sprintf("%s already exists", relativeTo(directory, target)),
-					Hint:     "Pass --yes to overwrite it, or -o PATH to write somewhere else.",
+					Hint:     "Run the interactive wizard to review a replacement, pass --force, or use -o PATH.",
 					ExitCode: kranzcli.ExitConflict,
 				}
 			}
@@ -183,7 +217,7 @@ func runInit(globals kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		}
 	} else if !os.IsNotExist(err) {
 		return err
-	} else if interactive {
+	} else if interactive && !wizardApproved {
 		confirmed, err := confirm(prompt, stdout, fmt.Sprintf("\nWrite %s?", relativeTo(directory, target)))
 		if err != nil {
 			return err
@@ -194,6 +228,9 @@ func runInit(globals kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		}
 	}
 
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
 	if err := config.WriteFileAtomically(target, []byte(rendered)); err != nil {
 		return err
 	}
@@ -233,40 +270,14 @@ func relativeTo(directory, path string) string {
 	return path
 }
 
-// buildInitDocument produces the configuration to write, either by converting
-// an existing source or by asking for the minimum a valid project needs.
-func buildInitDocument(directory string, options initOptions, interactive bool, prompt *bufio.Reader, stdout io.Writer) (*yaml.Node, error) {
-	source := options.from
-	if !options.fromSet && options.project == "" && options.service == "" && options.command == "" {
-		source = detectImportableSource(directory, options.outputPath)
-		if source != "" && interactive {
-			confirmed, err := confirm(prompt, stdout, fmt.Sprintf("Found %s. Import it?", source))
-			if err != nil {
-				return nil, err
-			}
-			if !confirmed {
-				source = ""
-			}
-		}
+// buildInitDocument produces a deterministic non-interactive configuration.
+// Import is always explicit: discovery belongs to the future `kranz scan`
+// workflow and init never infers authoring intent from nearby registry files.
+func buildInitDocument(directory string, options initOptions) (*yaml.Node, error) {
+	if options.fromSet {
+		return importDocument(directory, options.from)
 	}
-	if source != "" {
-		return importDocument(directory, source)
-	}
-	return wizardDocument(directory, options, interactive, prompt, stdout)
-}
-
-// detectImportableSource finds a configuration worth converting, skipping the
-// file init is about to write so init never offers to import its own output.
-func detectImportableSource(directory, outputPath string) string {
-	for _, candidate := range importableSources {
-		if candidate == outputPath {
-			continue
-		}
-		if info, err := os.Stat(filepath.Join(directory, candidate)); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return ""
+	return flagInitDocument(directory, options)
 }
 
 // importDocument converts a supported source by loading it through the same
@@ -362,32 +373,10 @@ func lifecycleStartAddsNothing(start config.Action, svc config.Service, projectD
 	return true
 }
 
-func wizardDocument(directory string, options initOptions, interactive bool, prompt *bufio.Reader, stdout io.Writer) (*yaml.Node, error) {
+func flagInitDocument(directory string, options initOptions) (*yaml.Node, error) {
 	project := options.project
 	serviceName := options.service
 	command := options.command
-
-	if interactive {
-		var err error
-		if project == "" {
-			project, err = ask(prompt, stdout, "Project name", filepath.Base(mustAbs(directory)))
-			if err != nil {
-				return nil, err
-			}
-		}
-		if serviceName == "" {
-			serviceName, err = ask(prompt, stdout, "First service name", "app")
-			if err != nil {
-				return nil, err
-			}
-		}
-		if command == "" {
-			command, err = ask(prompt, stdout, "Command to run it", "")
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
 	if project == "" {
 		project = filepath.Base(mustAbs(directory))
 	}
@@ -400,7 +389,7 @@ func wizardDocument(directory string, options initOptions, interactive bool, pro
 		return nil, &kranzcli.Error{
 			Code:     "missing_command",
 			Message:  "a service needs a command",
-			Hint:     "Run `kranz init --project NAME --service NAME --command COMMAND`, or run init in a terminal to be asked.",
+			Hint:     "Run `kranz init --name NAME --service NAME --command COMMAND`, or run init in a terminal to be asked.",
 			ExitCode: kranzcli.ExitUsage,
 		}
 	}
@@ -411,34 +400,6 @@ func wizardDocument(directory string, options initOptions, interactive bool, pro
 		ServiceOrder: []string{serviceName},
 	}
 
-	// package.json scripts become actions rather than services: they are things
-	// the user runs on demand, and nothing here executes them to find out.
-	if scripts := packageScripts(directory); len(scripts) > 0 {
-		accepted := scripts
-		if interactive {
-			confirmed, err := confirm(prompt, stdout, fmt.Sprintf("Found %d package.json script(s). Add them as actions?", len(scripts)))
-			if err != nil {
-				return nil, err
-			}
-			if !confirmed {
-				accepted = nil
-			}
-		}
-		if len(accepted) > 0 {
-			service := cfg.Services[serviceName]
-			service.Actions = make(map[string]config.Action, len(accepted))
-			names := make([]string, 0, len(accepted))
-			for name := range accepted {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				service.Actions[name] = config.Action{Command: "npm run " + name}
-			}
-			service.ActionOrder = names
-			cfg.Services[serviceName] = service
-		}
-	}
 	return effectiveDocument(cfg)
 }
 
@@ -448,23 +409,6 @@ func mustAbs(directory string) string {
 		return directory
 	}
 	return absolute
-}
-
-// packageScripts reads the scripts a package.json declares. It parses the file
-// and never runs anything: discovering what a project can do must not have the
-// side effects of doing it.
-func packageScripts(directory string) map[string]string {
-	data, err := os.ReadFile(filepath.Join(directory, "package.json"))
-	if err != nil {
-		return nil
-	}
-	var manifest struct {
-		Scripts map[string]string `json:"scripts"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil
-	}
-	return manifest.Scripts
 }
 
 func renderDocument(document *yaml.Node) (string, error) {
@@ -478,26 +422,6 @@ func renderDocument(document *yaml.Node) (string, error) {
 		return "", err
 	}
 	return buffer.String(), nil
-}
-
-func ask(prompt *bufio.Reader, stdout io.Writer, question, fallback string) (string, error) {
-	if fallback != "" {
-		_, _ = fmt.Fprintf(stdout, "%s [%s]: ", question, fallback)
-	} else {
-		_, _ = fmt.Fprintf(stdout, "%s: ", question)
-	}
-	line, err := prompt.ReadString('\n')
-	if err != nil && line == "" {
-		if err == io.EOF {
-			return fallback, nil
-		}
-		return "", err
-	}
-	answer := strings.TrimSpace(line)
-	if answer == "" {
-		return fallback, nil
-	}
-	return answer, nil
 }
 
 func confirm(prompt *bufio.Reader, stdout io.Writer, question string) (bool, error) {

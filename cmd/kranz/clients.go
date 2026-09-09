@@ -28,80 +28,138 @@ type clientRow struct {
 	Since   time.Time `json:"connected_at"`
 }
 
-func runClients(options kranzcli.GlobalOptions, stdout, stderr io.Writer) int {
+func runClients(options kranzcli.GlobalOptions, args []string, stdout, stderr io.Writer) int {
+	query, err := parseWatchQuery("clients", options.Output, args, "runtime", "project", "client", "surface", "label")
+	if err != nil {
+		return kranzcli.WriteError(stdout, stderr, options.Output, err)
+	}
+	if len(query.args) > 0 {
+		return kranzcli.WriteError(stdout, stderr, options.Output, watchUsageError("clients", fmt.Sprintf("unexpected argument %q", query.args[0])))
+	}
 	registry, err := kranzruntime.DefaultRegistry()
 	if err != nil {
 		return kranzcli.WriteError(stdout, stderr, options.Output, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	records, err := registry.List(ctx, version)
-	if err != nil {
-		return kranzcli.WriteError(stdout, stderr, options.Output, err)
-	}
-	rows := make([]clientRow, 0)
-	for _, record := range records {
-		if options.Project != "" && !matchesRuntimeReference(record, options.Project) {
-			continue
+	err = runWatch(query, stdout, func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		records, listErr := registry.List(ctx, version)
+		if listErr != nil {
+			return listErr
 		}
-		if record.State != kranzruntime.SessionRunning {
-			continue
-		}
-		client, dialErr := kranzruntime.DialContext(ctx, record.Socket, version)
-		if dialErr != nil {
-			continue
-		}
-		connected, clientsErr := client.Clients()
-		_ = client.Close()
-		if clientsErr != nil {
-			continue
-		}
-		for _, entry := range connected {
-			// This listing holds a connection of its own; reporting it would
-			// mean every runtime always has at least one client.
-			if entry.PID == ownPID() {
+		rows := make([]clientRow, 0)
+		for _, record := range records {
+			if options.Project != "" && !matchesRuntimeReference(record, options.Project) {
 				continue
 			}
-			rows = append(rows, clientRow{
-				Runtime: record.Name, ID: record.ID, Project: record.Project,
-				Surface: entry.Surface, Label: entry.Label, PID: entry.PID,
-				Version: entry.Version, Since: entry.ConnectedAt,
-			})
+			if record.State != kranzruntime.SessionRunning {
+				continue
+			}
+			client, dialErr := kranzruntime.DialContext(ctx, record.Socket, version)
+			if dialErr != nil {
+				continue
+			}
+			connected, clientsErr := client.Clients()
+			_ = client.Close()
+			if clientsErr != nil {
+				continue
+			}
+			for _, entry := range connected {
+				// Discovery and the background owner are runtime infrastructure,
+				// not clients using the runtime. Keep this command aligned with
+				// the CLIENTS column in `ps` and the TUI runtime switcher.
+				if !listableClient(entry, ownPID()) || !matchesWatchFilters(query.filters, map[string][]string{
+					"runtime": {record.Name}, "project": {record.Project}, "client": {entry.Surface, clientDisplayLabel(entry.Surface, entry.Label)}, "surface": {entry.Surface}, "label": {entry.Label},
+				}) {
+					continue
+				}
+				rows = append(rows, clientRow{
+					Runtime: record.Name, ID: record.ID, Project: record.Project,
+					Surface: entry.Surface, Label: entry.Label, PID: entry.PID,
+					Version: entry.Version, Since: entry.ConnectedAt,
+				})
+			}
 		}
-	}
-	if options.Output == kranzcli.OutputJSON {
-		if err := kranzcli.WriteJSON(stdout, rows); err != nil {
-			return kranzcli.WriteError(stdout, stderr, options.Output, err)
-		}
-		return 0
-	}
-	if len(rows) == 0 {
-		_, _ = fmt.Fprintln(stdout, "No client is attached to a Kranz runtime.")
-		return 0
-	}
-	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "RUNTIME\tSURFACE\tCLIENT\tPID\tCONNECTED")
-	for _, row := range rows {
-		label := row.Label
-		if label == "" {
-			label = "-"
-		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", row.Runtime, surfaceLabel(row.Surface), label, row.PID, shortDuration(time.Since(row.Since)))
-	}
-	if err := w.Flush(); err != nil {
+		return writeClients(options.Output, query.formatter, rows, stdout)
+	})
+	if err != nil {
 		return kranzcli.WriteError(stdout, stderr, options.Output, err)
 	}
 	return 0
 }
 
+func writeClients(output kranzcli.OutputFormat, formatter *rowTemplate, rows []clientRow, stdout io.Writer) error {
+	if output == kranzcli.OutputJSON {
+		return kranzcli.WriteJSON(stdout, rows)
+	}
+	if formatter != nil {
+		formatted := make([]map[string]any, 0, len(rows))
+		for _, row := range rows {
+			formatted = append(formatted, clientFormatRow(row))
+		}
+		return formatter.write(stdout, clientFormatHeaders(), formatted)
+	}
+	if len(rows) == 0 {
+		_, _ = fmt.Fprintln(stdout, "No client is attached to a Kranz runtime.")
+		return nil
+	}
+	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "RUNTIME\tPID\tCLIENT\tCONNECTED")
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", row.Runtime, row.PID, clientDisplayLabel(row.Surface, row.Label), shortDuration(time.Since(row.Since)))
+	}
+	return w.Flush()
+}
+
+func clientFormatHeaders() map[string]any {
+	return map[string]any{
+		"Runtime": "RUNTIME", "ID": "ID", "FullID": "FULL ID", "Project": "PROJECT", "PID": "PID",
+		"Client": "CLIENT", "Surface": "SURFACE", "Label": "LABEL",
+		"Version": "VERSION", "Connected": "CONNECTED", "ConnectedAt": "CONNECTED AT",
+	}
+}
+
+func clientFormatRow(row clientRow) map[string]any {
+	return map[string]any{
+		"Runtime": row.Runtime, "ID": shortID(row.ID), "FullID": row.ID, "Project": row.Project,
+		"PID": row.PID, "Client": clientDisplayLabel(row.Surface, row.Label),
+		"Surface": row.Surface, "Label": row.Label, "Version": row.Version,
+		"Connected": shortDuration(time.Since(row.Since)), "ConnectedAt": row.Since.Format(time.RFC3339),
+	}
+}
+
 // ownPID names this process so the listing can exclude its own probe.
 func ownPID() int { return os.Getpid() }
+
+func listableClient(client kranzruntime.ClientInfo, listingPID int) bool {
+	return client.PID != listingPID && client.Surface != "background"
+}
 
 func surfaceLabel(surface string) string {
 	if surface == "" {
 		return "unknown"
 	}
 	return surface
+}
+
+// clientDisplayLabel keeps the stable surface visible without repeating the
+// product name carried by built-in labels. A meaningful label still identifies
+// the particular client, for example "MCP: codex" or "TUI: attach".
+func clientDisplayLabel(surface, label string) string {
+	kind := strings.ToUpper(surfaceLabel(surface))
+	switch label {
+	case "", "Kranz dashboard", "Kranz CLI", "Kranz MCP":
+		return kind
+	case "Kranz attach":
+		return kind + ": attach"
+	case "Kranz foreground":
+		return kind + ": foreground"
+	}
+	prefix := kind + ":"
+	if len(label) >= len(prefix) && strings.EqualFold(label[:len(prefix)], prefix) {
+		return kind + label[len(kind):]
+	}
+	return kind + ": " + label
 }
 
 func matchesRuntimeReference(record kranzruntime.SessionRecord, reference string) bool {

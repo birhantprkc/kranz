@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// plannedTree mirrors the shape the real tree had while v0.8 was being built:
-// some commands runnable, some grammar reserved ahead of its implementation.
+// plannedTree covers a possible future tree: some commands runnable, some
+// grammar reserved ahead of its implementation.
 // The mechanism is tested here rather than against DefaultTree so it keeps
 // working for the next release that reserves a command before writing it.
 func plannedTree() *Command {
@@ -33,7 +33,7 @@ func TestHelpSeparatesPlannedCommands(t *testing.T) {
 		t.Fatalf("Help returned an error: %v", err)
 	}
 
-	commands, planned, found := strings.Cut(output, "Planned for v0.8.0 (not implemented yet):")
+	commands, planned, found := strings.Cut(output, "Planned for a future release (not implemented yet):")
 	if !found {
 		t.Fatalf("help does not list planned commands separately:\n%s", output)
 	}
@@ -78,8 +78,8 @@ func TestHelpForPlannedCommandSaysSo(t *testing.T) {
 	}
 }
 
-// Every command v0.8.0 promises is now implemented. A planned command
-// reappearing here means a release is about to ship grammar it cannot run.
+// Every command in the release tree is implemented. A planned command
+// appearing here means a release is about to ship grammar it cannot run.
 func TestReleaseSurfaceHasNoPlannedCommands(t *testing.T) {
 	var planned []string
 	var walk func(command *Command, path []string)
@@ -105,6 +105,23 @@ func TestReleaseSurfaceHasNoPlannedCommands(t *testing.T) {
 	}
 }
 
+func TestRootHelpKeepsActionsBesideServices(t *testing.T) {
+	output, err := Help(DefaultTree(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := strings.Index(output, "\n  services ")
+	actions := strings.Index(output, "\n  actions  ")
+	tags := strings.Index(output, "\n  tags     ")
+	if services < 0 || actions < 0 || tags < 0 {
+		t.Fatalf("root help is missing services, actions, or tags:\n%s", output)
+	}
+	if services >= actions || actions >= tags {
+		t.Fatalf("root help order is services=%d actions=%d tags=%d; actions should sit beside services:\n%s",
+			services, actions, tags, output)
+	}
+}
+
 func TestHelpDocumentsLifecycleOptionsThatChangeCommandMeaning(t *testing.T) {
 	for _, test := range []struct {
 		command []string
@@ -112,7 +129,7 @@ func TestHelpDocumentsLifecycleOptionsThatChangeCommandMeaning(t *testing.T) {
 	}{
 		{[]string{"init"}, []string{"-y|--yes"}},
 		{[]string{"config", "explain"}, []string{"--all"}},
-		{[]string{"up"}, []string{"-d|--detach", "--no-start"}},
+		{[]string{"up"}, []string{"-d|--detach", "--start"}},
 		{[]string{"down"}, []string{"--force"}},
 	} {
 		output, err := Help(DefaultTree(), test.command)
@@ -122,6 +139,20 @@ func TestHelpDocumentsLifecycleOptionsThatChangeCommandMeaning(t *testing.T) {
 		for _, want := range test.want {
 			if !strings.Contains(output, want) {
 				t.Errorf("help %v omits %q:\n%s", test.command, want, output)
+			}
+		}
+	}
+}
+
+func TestHelpOmitsRemovedOptions(t *testing.T) {
+	for _, path := range [][]string{{"up"}, {"mcp"}} {
+		output, err := Help(DefaultTree(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, removed := range []string{"--no-start", "--attach-only"} {
+			if strings.Contains(output, removed) {
+				t.Errorf("help for %q still mentions removed option %q", path, removed)
 			}
 		}
 	}

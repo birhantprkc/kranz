@@ -19,9 +19,22 @@ import (
 // execution slot, and running it anywhere else would let two callers run the
 // same action at once.
 
+type actionListEntry struct {
+	ID          string `json:"id"`
+	Owner       string `json:"owner"`
+	OwnerKind   string `json:"owner_kind"`
+	Description string `json:"description"`
+	Interactive bool   `json:"interactive"`
+	Confirm     bool   `json:"confirm"`
+}
+
 func runActionList(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	formatter, args, err := extractRowFormat("actions", options.Output, args)
+	if err != nil {
+		return err
+	}
 	if len(args) > 1 {
-		return &kranzcli.Error{Code: "invalid_arguments", Message: "action list accepts at most one owner", ExitCode: kranzcli.ExitUsage}
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "actions accepts at most one owner", ExitCode: kranzcli.ExitUsage}
 	}
 	cfg, _, err := loadProject(options)
 	if err != nil {
@@ -31,15 +44,23 @@ func runActionList(options kranzcli.GlobalOptions, args []string, stdout io.Writ
 	if len(args) == 1 {
 		owner = args[0]
 	}
-	type entry struct {
-		ID          string `json:"id"`
-		Owner       string `json:"owner"`
-		OwnerKind   string `json:"owner_kind"`
-		Description string `json:"description"`
-		Interactive bool   `json:"interactive"`
-		Confirm     bool   `json:"confirm"`
+	entries := actionListEntries(cfg, owner)
+	if owner != "" && len(entries) == 0 {
+		return &kranzcli.Error{
+			Code:     "owner_not_found",
+			Message:  fmt.Sprintf("no service or action group named %q defines actions", owner),
+			Hint:     "Run `kranz actions` to see every action this project defines.",
+			ExitCode: kranzcli.ExitNotFound,
+		}
 	}
-	entries := make([]entry, 0)
+	if options.Output == kranzcli.OutputJSON {
+		return kranzcli.WriteJSON(stdout, entries)
+	}
+	return writeActionList(stdout, entries, formatter)
+}
+
+func actionListEntries(cfg *config.Config, owner string) []actionListEntry {
+	entries := make([]actionListEntry, 0)
 	for _, id := range cfg.ActionIDs() {
 		if owner != "" && id.Owner != owner {
 			continue
@@ -48,7 +69,7 @@ func runActionList(options kranzcli.GlobalOptions, args []string, stdout io.Writ
 		if !ok {
 			continue
 		}
-		entries = append(entries, entry{
+		entries = append(entries, actionListEntry{
 			ID:          actionIDString(id),
 			Owner:       id.Owner,
 			OwnerKind:   string(id.OwnerKind),
@@ -57,25 +78,31 @@ func runActionList(options kranzcli.GlobalOptions, args []string, stdout io.Writ
 			Confirm:     action.Confirm != nil && *action.Confirm,
 		})
 	}
-	if owner != "" && len(entries) == 0 {
-		return &kranzcli.Error{
-			Code:     "owner_not_found",
-			Message:  fmt.Sprintf("no service or action group named %q defines actions", owner),
-			Hint:     "Run `kranz action list` to see every action this project defines.",
-			ExitCode: kranzcli.ExitNotFound,
+	return entries
+}
+
+func writeActionList(stdout io.Writer, entries []actionListEntry, formatter *rowTemplate) error {
+	if formatter != nil {
+		rows := make([]map[string]any, 0, len(entries))
+		for _, item := range entries {
+			rows = append(rows, map[string]any{
+				"Action": item.ID, "Owner": item.Owner, "Kind": item.OwnerKind,
+				"Interactive": item.Interactive, "Confirm": item.Confirm, "Description": item.Description,
+			})
 		}
-	}
-	if options.Output == kranzcli.OutputJSON {
-		return kranzcli.WriteJSON(stdout, entries)
+		return formatter.write(stdout, map[string]any{
+			"Action": "ACTION", "Owner": "OWNER", "Kind": "KIND",
+			"Interactive": "INTERACTIVE", "Confirm": "CONFIRM", "Description": "DESCRIPTION",
+		}, rows)
 	}
 	if len(entries) == 0 {
 		_, _ = fmt.Fprintln(stdout, "This project defines no actions.")
 		return nil
 	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ACTION\tOWNER\tKIND\tINTERACTIVE\tDESCRIPTION")
+	_, _ = fmt.Fprintln(w, "ACTION\tOWNER\tKIND\tINTERACTIVE\tCONFIRM\tDESCRIPTION")
 	for _, item := range entries {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%s\n", item.ID, item.Owner, item.OwnerKind, item.Interactive, orDash(item.Description))
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%t\t%t\t%s\n", item.ID, item.Owner, item.OwnerKind, item.Interactive, item.Confirm, orDash(item.Description))
 	}
 	return w.Flush()
 }
@@ -95,13 +122,13 @@ func resolveActionID(cfg *config.Config, reference string) (config.ActionID, con
 		action, _ := cfg.ResolveAction(matches[0])
 		return matches[0], action, nil
 	case 0:
-		hint := "Run `kranz action list` to see every action this project defines."
+		hint := "Run `kranz actions` to see every action this project defines."
 		if !strings.Contains(reference, "/") {
 			hint = "Actions are named OWNER/ACTION."
 			if ids := cfg.ActionIDs(); len(ids) > 0 {
-				hint += fmt.Sprintf(" For example: `kranz action info %s`.", actionIDString(ids[0]))
+				hint += fmt.Sprintf(" For example: `kranz actions info %s`.", actionIDString(ids[0]))
 			} else {
-				hint += " Run `kranz action list` to see what this project defines."
+				hint += " Run `kranz actions` to see what this project defines."
 			}
 		}
 		return config.ActionID{}, config.Action{}, &kranzcli.Error{

@@ -114,36 +114,37 @@ func runConfigCheck(options kranzcli.GlobalOptions, stdout io.Writer) error {
 	return nil
 }
 
-func runList(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
-	kind := "services"
-	if len(args) > 0 {
-		kind = args[0]
+func runServices(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	formatter, args, err := extractRowFormat("services", options.Output, args)
+	if err != nil {
+		return err
 	}
-	if len(args) > 1 {
-		return &kranzcli.Error{Code: "invalid_arguments", Message: "list accepts one of services, actions, or tags", ExitCode: kranzcli.ExitUsage}
+	if len(args) != 0 {
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "services does not accept selectors", ExitCode: kranzcli.ExitUsage}
 	}
 	cfg, _, err := loadProject(options)
 	if err != nil {
 		return err
 	}
-	switch kind {
-	case "services":
-		return listServices(cfg, options, stdout)
-	case "actions":
-		return listActions(cfg, options, stdout)
-	case "tags":
-		return listTags(cfg, options, stdout)
-	default:
-		return &kranzcli.Error{
-			Code:     "invalid_arguments",
-			Message:  fmt.Sprintf("unknown list kind %q", kind),
-			Hint:     "Use `kranz list services`, `kranz list actions`, or `kranz list tags`.",
-			ExitCode: kranzcli.ExitUsage,
-		}
-	}
+	return listServices(cfg, options, stdout, formatter)
 }
 
-func listServices(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.Writer) error {
+func runTags(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	formatter, args, err := extractRowFormat("tags", options.Output, args)
+	if err != nil {
+		return err
+	}
+	if len(args) != 0 {
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "tags does not accept selectors", ExitCode: kranzcli.ExitUsage}
+	}
+	cfg, _, err := loadProject(options)
+	if err != nil {
+		return err
+	}
+	return listTags(cfg, options, stdout, formatter)
+}
+
+func listServices(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.Writer, formatter *rowTemplate) error {
 	type entry struct {
 		Name        string   `json:"name"`
 		Description string   `json:"description"`
@@ -160,6 +161,19 @@ func listServices(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.
 	if options.Output == kranzcli.OutputJSON {
 		return kranzcli.WriteJSON(stdout, entries)
 	}
+	if formatter != nil {
+		rows := make([]map[string]any, 0, len(entries))
+		for _, item := range entries {
+			rows = append(rows, map[string]any{
+				"Name": item.Name, "Description": item.Description, "Tags": strings.Join(item.Tags, ","),
+				"DependsOn": strings.Join(item.DependsOn, ","), "Ports": joinPortsOrDash(item.Ports), "Disabled": item.Disabled,
+			})
+		}
+		return formatter.write(stdout, map[string]any{
+			"Name": "NAME", "Description": "DESCRIPTION", "Tags": "TAGS",
+			"DependsOn": "DEPENDS ON", "Ports": "PORTS", "Disabled": "DISABLED",
+		}, rows)
+	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "NAME\tTAGS\tDEPENDS ON\tPORTS\tDESCRIPTION")
 	for _, item := range entries {
@@ -172,36 +186,7 @@ func listServices(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.
 	return w.Flush()
 }
 
-func listActions(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.Writer) error {
-	type entry struct {
-		ID          string `json:"id"`
-		Owner       string `json:"owner"`
-		OwnerKind   string `json:"owner_kind"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Interactive bool   `json:"interactive"`
-	}
-	ids := cfg.ActionIDs()
-	entries := make([]entry, 0, len(ids))
-	for _, id := range ids {
-		action, ok := cfg.ResolveAction(id)
-		if !ok {
-			continue
-		}
-		entries = append(entries, entry{actionIDString(id), id.Owner, string(id.OwnerKind), id.Name, action.Description, action.Interactive != nil && *action.Interactive})
-	}
-	if options.Output == kranzcli.OutputJSON {
-		return kranzcli.WriteJSON(stdout, entries)
-	}
-	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ACTION\tOWNER\tINTERACTIVE\tDESCRIPTION")
-	for _, item := range entries {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%t\t%s\n", item.ID, item.Owner, item.Interactive, orDash(item.Description))
-	}
-	return w.Flush()
-}
-
-func listTags(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.Writer) error {
+func listTags(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.Writer, formatter *rowTemplate) error {
 	counts := make(map[string]int)
 	for _, name := range cfg.ServiceNames() {
 		for _, tag := range cfg.Services[name].Tags {
@@ -223,6 +208,13 @@ func listTags(cfg *config.Config, options kranzcli.GlobalOptions, stdout io.Writ
 	}
 	if options.Output == kranzcli.OutputJSON {
 		return kranzcli.WriteJSON(stdout, entries)
+	}
+	if formatter != nil {
+		rows := make([]map[string]any, 0, len(entries))
+		for _, item := range entries {
+			rows = append(rows, map[string]any{"Tag": item.Tag, "Services": item.Services})
+		}
+		return formatter.write(stdout, map[string]any{"Tag": "TAG", "Services": "SERVICES"}, rows)
 	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "TAG\tSERVICES")
@@ -273,16 +265,24 @@ func orDash(value string) string {
 	return value
 }
 
-func runInfo(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
-	if len(args) > 1 {
-		return &kranzcli.Error{Code: "invalid_arguments", Message: "info accepts at most one service", ExitCode: kranzcli.ExitUsage}
+func runProject(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "project accepts no arguments", ExitCode: kranzcli.ExitUsage}
 	}
 	cfg, paths, err := loadProject(options)
 	if err != nil {
 		return err
 	}
-	if len(args) == 0 {
-		return projectInfo(cfg, paths, options, stdout)
+	return projectInfo(cfg, paths, options, stdout)
+}
+
+func runServiceInfo(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	if len(args) != 1 {
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "services info takes exactly one service", Hint: "Run `kranz services info SERVICE`.", ExitCode: kranzcli.ExitUsage}
+	}
+	cfg, _, err := loadProject(options)
+	if err != nil {
+		return err
 	}
 	name := args[0]
 	svc, ok := cfg.Services[name]
@@ -290,7 +290,7 @@ func runInfo(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		return &kranzcli.Error{
 			Code:     "service_not_found",
 			Message:  fmt.Sprintf("service %q was not found", name),
-			Hint:     "Run `kranz list services` to see what this project defines.",
+			Hint:     "Run `kranz services` to see what this project defines.",
 			ExitCode: kranzcli.ExitNotFound,
 		}
 	}
@@ -417,16 +417,34 @@ func directDependents(cfg *config.Config, name string) []string {
 	return dependents
 }
 
-// runPlan shows the waves a start would use: everything in one wave depends
-// only on earlier waves, which is exactly how the runtime gates readiness.
+// runPlan shows the exact service set a lifecycle operation would affect.
+// Starts can be planned from configuration; stops and restarts consult the
+// live runtime because stopped dependents are not affected by those operations.
 func runPlan(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
-	cfg, _, err := loadProject(options)
+	operation, selectors, err := parsePlanOptions(args)
 	if err != nil {
 		return err
 	}
-	local := app.NewLocal(cfg, nil, app.Options{})
-	defer func() { _ = local.Shutdown() }()
-	plan, err := local.Plan(app.PlanRequest{Operation: "start", Selectors: args, IncludeDependencies: true})
+	var planner app.API
+	var cfg *config.Config
+	if operation == "start" {
+		loaded, _, loadErr := loadProject(options)
+		if loadErr != nil {
+			return loadErr
+		}
+		cfg = loaded
+		local := app.NewLocal(cfg, nil, app.Options{})
+		defer func() { _ = local.Shutdown() }()
+		planner = local
+	} else {
+		client, closeClient, dialErr := dialProjectRuntime(options)
+		if dialErr != nil {
+			return dialErr
+		}
+		defer closeClient()
+		planner = client
+	}
+	plan, err := planner.Plan(app.PlanRequest{Operation: operation, Selectors: selectors, IncludeDependencies: operation == "start"})
 	if err != nil {
 		return classifyLogQueryError(err)
 	}
@@ -440,7 +458,20 @@ func runPlan(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 		for _, plannedWave := range plan.Waves {
 			entries = append(entries, wave{plannedWave.Wave, plannedWave.Services})
 		}
+		if operation != "start" && len(plan.Targets) > 0 {
+			entries = append(entries, wave{Wave: 1, Services: plan.Targets})
+		}
 		return kranzcli.WriteJSON(stdout, entries)
+	}
+	if operation != "start" {
+		_, _ = fmt.Fprintf(stdout, "%s targets:\n", strings.ToUpper(operation[:1])+operation[1:])
+		for _, name := range plan.Targets {
+			_, _ = fmt.Fprintf(stdout, "  %s\n", name)
+		}
+		if plan.RequiresConfirmation {
+			_, _ = fmt.Fprintln(stdout, "\nRequires confirmation.")
+		}
+		return nil
 	}
 	for _, plannedWave := range plan.Waves {
 		names := plannedWave.Services
@@ -460,20 +491,67 @@ func runPlan(options kranzcli.GlobalOptions, args []string, stdout io.Writer) er
 	return nil
 }
 
-func runGraph(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
-	format := "text"
+func parsePlanOptions(args []string) (string, []string, error) {
+	operation := "start"
+	operationSet := false
+	selectors := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
 		switch {
-		case args[index] == "--format" && index+1 < len(args):
+		case args[index] == "--operation":
+			if operationSet {
+				return "", nil, &kranzcli.Error{Code: "invalid_arguments", Message: "--operation may be specified only once", ExitCode: kranzcli.ExitUsage}
+			}
+			if index+1 >= len(args) {
+				return "", nil, &kranzcli.Error{Code: "missing_option_value", Message: "--operation requires start, stop, or restart", ExitCode: kranzcli.ExitUsage}
+			}
+			index++
+			operation, operationSet = args[index], true
+		case strings.HasPrefix(args[index], "--operation="):
+			if operationSet {
+				return "", nil, &kranzcli.Error{Code: "invalid_arguments", Message: "--operation may be specified only once", ExitCode: kranzcli.ExitUsage}
+			}
+			operation, operationSet = strings.TrimPrefix(args[index], "--operation="), true
+		case strings.HasPrefix(args[index], "-"):
+			return "", nil, &kranzcli.Error{Code: "unknown_option", Message: fmt.Sprintf("unknown plan option %q", args[index]), Hint: "Use --operation start, stop, or restart.", ExitCode: kranzcli.ExitUsage}
+		default:
+			selectors = append(selectors, args[index])
+		}
+	}
+	if operation != "start" && operation != "stop" && operation != "restart" {
+		return "", nil, &kranzcli.Error{Code: "invalid_arguments", Message: fmt.Sprintf("unknown plan operation %q", operation), Hint: "Use start, stop, or restart.", ExitCode: kranzcli.ExitUsage}
+	}
+	return operation, selectors, nil
+}
+
+func runGraph(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	format := "text"
+	formatSet := false
+	for index := 0; index < len(args); index++ {
+		switch {
+		case args[index] == "--format":
+			if formatSet {
+				return graphFormatError("--format may be specified only once")
+			}
+			if index+1 >= len(args) {
+				return graphFormatError("--format requires text, json, or dot")
+			}
 			format = args[index+1]
+			formatSet = true
 			index++
 		case strings.HasPrefix(args[index], "--format="):
+			if formatSet {
+				return graphFormatError("--format may be specified only once")
+			}
 			format = strings.TrimPrefix(args[index], "--format=")
+			formatSet = true
 		default:
-			return &kranzcli.Error{Code: "invalid_arguments", Message: fmt.Sprintf("unknown graph argument %q", args[index]), Hint: "Use `kranz graph [--format text|json|dot]`.", ExitCode: kranzcli.ExitUsage}
+			return graphFormatError(fmt.Sprintf("unknown graph argument %q", args[index]))
 		}
 	}
 	if options.Output == kranzcli.OutputJSON {
+		if formatSet && format != "json" {
+			return graphFormatError(fmt.Sprintf("--format=%s conflicts with --output=json", format))
+		}
 		format = "json"
 	}
 	cfg, _, err := loadProject(options)
@@ -505,11 +583,19 @@ func runGraph(options kranzcli.GlobalOptions, args []string, stdout io.Writer) e
 		}
 		return kranzcli.WriteJSON(stdout, nodes)
 	default:
-		return &kranzcli.Error{Code: "invalid_arguments", Message: fmt.Sprintf("unknown graph format %q", format), Hint: "Use text, json, or dot.", ExitCode: kranzcli.ExitUsage}
+		return graphFormatError(fmt.Sprintf("unknown graph format %q", format))
 	}
 }
 
+func graphFormatError(message string) error {
+	return &kranzcli.Error{Code: "invalid_graph_format", Message: message, Hint: "Use `kranz graph --format text|json|dot`; --output=json is compatible only with --format=json.", ExitCode: kranzcli.ExitUsage}
+}
+
 func runPorts(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	formatter, args, err := extractRowFormat("ports", options.Output, args)
+	if err != nil {
+		return err
+	}
 	cfg, _, err := loadProject(options)
 	if err != nil {
 		return err
@@ -582,6 +668,19 @@ func runPorts(options kranzcli.GlobalOptions, args []string, stdout io.Writer) e
 
 	if options.Output == kranzcli.OutputJSON {
 		return kranzcli.WriteJSON(stdout, entries)
+	}
+	if formatter != nil {
+		rows := make([]map[string]any, 0, len(entries))
+		for _, item := range entries {
+			rows = append(rows, map[string]any{
+				"Service": item.Service, "Port": item.Port, "Origin": item.Origin,
+				"State": item.State, "PID": pidLabel(item.PID), "Process": item.Process,
+			})
+		}
+		return formatter.write(stdout, map[string]any{
+			"Service": "SERVICE", "Port": "PORT", "Origin": "ORIGIN",
+			"State": "STATE", "PID": "PID", "Process": "PROCESS",
+		}, rows)
 	}
 	if len(entries) == 0 {
 		_, _ = fmt.Fprintln(stdout, "No ports to report.")
@@ -660,7 +759,7 @@ func detectedPortsByService(options kranzcli.GlobalOptions) map[string][]int {
 
 func runPortInspect(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
 	if len(args) != 1 {
-		return &kranzcli.Error{Code: "invalid_arguments", Message: "port inspect takes exactly one port", Hint: "Run `kranz port inspect 8080`.", ExitCode: kranzcli.ExitUsage}
+		return &kranzcli.Error{Code: "invalid_arguments", Message: "ports inspect takes exactly one port", Hint: "Run `kranz ports inspect 8080`.", ExitCode: kranzcli.ExitUsage}
 	}
 	number, err := strconv.Atoi(args[0])
 	if err != nil || number < 1 || number > 65535 {
@@ -719,7 +818,11 @@ func protocolOf(info *config.PortInfo) string {
 // runDoctor runs preflight checks that do not start anything. It reports every
 // finding rather than stopping at the first, because a preflight that hides
 // the second problem behind the first costs another run to discover it.
-func runDoctor(options kranzcli.GlobalOptions, stdout io.Writer) error {
+func runDoctor(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
+	formatter, err := parseRowFormat("doctor", options.Output, args)
+	if err != nil {
+		return err
+	}
 	cfg, paths, err := loadProject(options)
 	if err != nil {
 		return err
@@ -730,6 +833,18 @@ func runDoctor(options kranzcli.GlobalOptions, stdout io.Writer) error {
 
 	if options.Output == kranzcli.OutputJSON {
 		if err := kranzcli.WriteJSON(stdout, result); err != nil {
+			return err
+		}
+	} else if formatter != nil {
+		rows := make([]map[string]any, 0, len(result.Findings))
+		for _, item := range result.Findings {
+			rows = append(rows, map[string]any{
+				"Check": item.Check, "Subject": item.Subject, "Status": item.Status, "Detail": item.Detail,
+			})
+		}
+		if err := formatter.write(stdout, map[string]any{
+			"Check": "CHECK", "Subject": "SUBJECT", "Status": "STATUS", "Detail": "DETAIL",
+		}, rows); err != nil {
 			return err
 		}
 	} else {

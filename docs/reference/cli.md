@@ -46,7 +46,7 @@ than being appended to a hidden inherited list.
 
 ```bash
 KRANZ_PROJECT=billing kranz status
-KRANZ_DIRECTORY=~/projects/shop kranz list services
+KRANZ_DIRECTORY=~/projects/shop kranz services
 KRANZ_CONFIG=kranz.yaml:kranz.local.yaml kranz config show
 ```
 
@@ -94,23 +94,47 @@ prefix.
 ### Creating a configuration
 
 ```bash
-kranz init                                   # wizard, or flags when there is no terminal
+kranz init                                   # interactive authoring wizard
+kranz init ./new-project                     # start in another directory
 kranz init --from Procfile                   # convert an existing source
 kranz init --from process-compose.yaml
+kranz init --name Shop --service api --command "npm run dev" --yes
 kranz init --service api --command "npm run dev" --yes
 kranz init -o kranz.local.yaml
 ```
 
-`init` discovers a Kranz, Process Compose, or Procfile source and offers to
-convert it, reads `package.json` scripts and offers them as actions without
-running them, previews the file it is about to write, and refuses to replace an
-existing file without `--yes` or a confirmation. It reloads what it wrote before
-reporting success.
+Interactive `init` builds an in-memory draft. Start with the project name and
+directory, optionally configure the full project appearance with a live theme
+preview, then add any number of services and actions. Draft entries can be
+opened, edited, or deleted before the final YAML review. A service asks for its
+name, directory, command, and optional port. An action asks for its name,
+project-or-service owner, directory, and command.
+
+`init` does not inspect package registries or infer commands. Import is explicit
+through `--from`. An existing native configuration opens a replacement choice
+before the wizard and a line diff before the final save; cancelling at either
+point leaves it byte-for-byte unchanged. The file is written atomically and
+reloaded before success is reported.
+
+Appearance settings are independent. Choosing only a theme writes only
+`ui.theme`; accent, background source or custom colour, and `auto`/`dark`/`light`
+colour mode are emitted only when changed. Choosing inherited appearance omits
+the `ui` block entirely.
+
+`--name` sets the project written into the new file. Global `-p/--project`
+always selects a runtime and is therefore rejected by `init`.
+
+Without a terminal, the inputs must be explicit. `--yes` confirms that complete
+flag form; it does not discover commands, classify nearby files, or permit an
+overwrite. Existing automation can continue to use an explicit `--from PATH`
+conversion. Replacing a file without a terminal additionally requires
+`--force`.
 
 ### Inspecting a project
 
-These read the configuration only. They work before the first `up` and never
-disturb a running runtime.
+These inspect configuration and, where useful, current runtime state. They
+never mutate a running runtime; configuration-only forms work before the first
+`up`.
 
 ```bash
 kranz config                        # same as config show
@@ -118,20 +142,25 @@ kranz config check                  # load, merge, and validate
 kranz config show [--provenance]    # effective configuration, secrets redacted
 kranz config explain [SERVICE] [--all]  # which layer set each field
 kranz doctor                        # preflight checks
-kranz list [services|actions|tags]
-kranz info [SERVICE]
+kranz project                       # project details
+kranz services                      # configured services
+kranz services info SERVICE         # one service's configuration and live state
+kranz actions [OWNER]               # configured actions; optionally by owner
+kranz tags                          # configured service tags
 kranz plan [SELECTOR ...]           # the waves a start would use
+kranz plan --operation stop api     # services a stop would affect
 kranz graph [--format text|json|dot]
 kranz ports [SELECTOR ...]
-kranz port inspect PORT
+kranz ports inspect PORT
 ```
 
 `ports` reports both the ports a service declares and the ports a running
 runtime saw it open, labelled by origin, because a service that picks its port
 at runtime is exactly the case where the configuration cannot answer.
 
-`info SERVICE` describes the configuration, and adds what the service is doing
-right now when a runtime is up.
+`services info SERVICE` describes the configuration, and adds what the service
+is doing right now when a runtime is up. `project` describes only the project,
+so the same command never changes entity based on whether an argument is present.
 
 `config show` redacts environment values whose name looks like a credential and
 keeps services, action groups, and actions in the order the configuration
@@ -139,8 +168,8 @@ declares them. `config explain` on a single-layer project says so instead of
 repeating the same filename on every field; `--all` lists them anyway.
 
 A group runs its obvious subcommand when invoked bare: `kranz config` is
-`config show`, `kranz action` is `action list`, and `kranz port 8080` is
-`port inspect 8080`.
+`config show`, `kranz services` is `services list`, `kranz actions` is
+`actions list`, and `kranz ports` is `ports list`.
 
 `plan` prints the dependency waves the supervisor itself gates readiness on, and
 pulls in the dependencies of whatever you selected:
@@ -158,6 +187,10 @@ Wave 4:
   gateway  (after billing-api, catalog-api)
 ```
 
+Bare `plan` and `--operation start` work from configuration alone. Stop and
+restart previews require a running runtime because they report only the
+currently running dependents that the real operation would affect.
+
 `doctor` reports every finding rather than stopping at the first, and exits `3`
 when any check fails.
 
@@ -166,9 +199,12 @@ when any check fails.
 ```bash
 kranz ps                            # every runtime this user has running
 kranz clients                       # who is attached to those runtimes
-kranz up [SELECTOR ...]             # start runtime and stream multiplexed logs
-kranz up -d [SELECTOR ...]          # background runtime, returns the prompt
-kranz up --no-start                 # empty runtime with foreground log client
+kranz up                            # empty runtime; Ctrl+C stops it
+kranz up -d                         # empty background runtime; prompt returns
+kranz up [SELECTOR ...]             # selected services; foreground log stream
+kranz up -d [SELECTOR ...]          # selected services in the background
+kranz up --start                    # every enabled service; foreground stream
+kranz up --start -d                 # every enabled service in the background
 kranz attach                        # open the TUI on a running runtime
 kranz status [SELECTOR ...]
 kranz start SELECTOR ...
@@ -185,44 +221,89 @@ session, not the ordinary way to stop a project.
 
 Every runtime has an independent background supervisor. Leaving a TUI through
 its detach action does not stop it; confirming shutdown or running an external
-`down` stops the runtime and closes attached clients cleanly.
+`down` stops the runtime and closes attached clients cleanly. The quit
+confirmation's **Close & choose** action stops the current runtime and opens
+the live chooser so another runtime can be attached without restarting the
+TUI.
 
-`ps` lists runtimes; `clients` lists each runtime's owner together with the CLI,
-TUI, and MCP connections working in it, including surface, label, PID, and
-connection age. They are two commands because they answer two questions: what
-is running, and who is using it. Narrow either one to a single runtime with
-`-p NAME|ID`.
+`ps` lists runtimes; `clients` lists the CLI, TUI, and MCP connections working
+in them, including client identity, PID, and connection age. They are two
+commands because they answer two questions: what is running, and who is using
+it. Narrow either one to a single runtime with `-p NAME|ID`.
 
 ```console
 $ kranz ps
-ID        NAME       PROJECT    SERVICES  CLIENTS  STATE    UPTIME
-7fa21c8d  shop-dev   Shop       4/4       3        running  18m
-91bc430a  billing    Billing    3/3       1        running  6m
-3de94a71  analytics  Analytics  2/2       2        running  2m
+ID        PID    NAME       PROJECT    SERVICES  CLIENTS  STATE    UPTIME
+7fa21c8d  18400  shop-dev   Shop       4/4       2        running  18m
+91bc430a  18022  billing    Billing    3/3       0        running  6m
+3de94a71  19001  analytics  Analytics  2/2       1        running  2m
 
 $ kranz clients
-RUNTIME    SURFACE     CLIENT            PID    CONNECTED
-shop-dev   background  Kranz background  18400  18m
-shop-dev   tui         Kranz dashboard   18421  18m
-shop-dev   mcp         Kranz MCP         18472  4m
-billing    background  Kranz background  18022  6m
-analytics  background  Kranz background  19001  2m
-analytics  cli         Kranz CLI         19108  <1s
+RUNTIME    PID    CLIENT  CONNECTED
+shop-dev   18421  TUI     18m
+shop-dev   18472  MCP     4m
+analytics  19108  CLI     <1s
 ```
 
-The `shop-dev` clients share one runtime row. Every running runtime has a
-background owner connection; TUI, foreground log streaming, CLI, and MCP
-connections come and go without taking ownership. The short-lived command on
-`analytics` appears only while it is connected. `kranz clients` never counts
-itself.
+The `shop-dev` clients share one runtime row. TUI, foreground log streaming,
+CLI, and MCP connections come and go without taking ownership. The short-lived
+command on `analytics` appears only while it is connected. The runtime's
+background owner is infrastructure rather than a client, so `kranz clients`
+does not show it and never shows its own discovery connection. A runtime with
+no clients remains visible in `kranz ps` and the TUI Runtimes window, where its
+`CLIENTS` value is `-`.
 
-These are the built-in client labels. The TUI reports `Kranz dashboard` (or
-`Kranz attach` when opened with `kranz attach`), the runtime owner reports
-`Kranz background`, a foreground `kranz up` client reports `Kranz foreground`,
-MCP reports `Kranz MCP`, and ordinary commands report `Kranz CLI`. An MCP launcher can set
-`KRANZ_MCP_CLIENT=codex` to replace the default MCP label with `MCP: codex` when
-several agent clients need to be distinguished. The label changes only what
-`kranz clients` displays; it does not select or rename a runtime.
+`up` has two independent choices. With no selectors it starts no services;
+selectors start only what they name, and `--start` explicitly starts every
+enabled service. Without `-d`, the terminal owns the runtime lifetime, streams
+logs, and receives project exit codes; `-d` returns after readiness.
+
+Built-in clients are displayed compactly as `TUI`, `CLI`, and `MCP`.
+Meaningful variants retain their identity, such as `TUI: attach`,
+`CLI: foreground`, or `MCP: codex`. An MCP launcher can set
+`KRANZ_MCP_CLIENT=codex` to produce the latter when several agent clients need
+to be distinguished. The label changes only what `kranz clients` displays; it
+does not select or rename a runtime.
+
+Row-oriented inspection commands accept Docker-style Go templates. Without
+the `table` prefix, the template renders once per row with no header:
+
+```console
+$ kranz ps --format '&lbrace;&lbrace;.PID}}\t&lbrace;&lbrace;.Name}}\t&lbrace;&lbrace;.State}}'
+18400   shop-dev   running
+
+$ kranz clients --format 'table &lbrace;&lbrace;.PID}}\t&lbrace;&lbrace;.Runtime}}\t&lbrace;&lbrace;.Client}}'
+PID     RUNTIME    CLIENT
+18421   shop-dev   TUI
+18472   shop-dev   MCP: codex
+```
+
+`ps` exposes `.ID`, `.FullID`, `.PID`, `.Name`, `.Project`, `.Services`,
+`.Clients`, `.State`, `.Uptime`, `.Directory`, `.Mode`, `.Version`, and
+`.StartedAt`. `clients` exposes `.Runtime`, `.ID`, `.FullID`, `.Project`,
+`.PID`, `.Client`, `.Surface`, `.Label`, `.Version`, `.Connected`, and
+`.ConnectedAt`. The `json`, `lower`, `upper`, `split`, and `join` template
+functions are available. `--format` and `--output=json` cannot be combined.
+The same formatter is available for `status`, `ports`, `doctor`,
+`config explain`, `services`, `actions`, and `tags`. Run a
+command with `--format '&lbrace;&lbrace;json .}}'` to discover its stable fields and current
+values; `table ` may be prefixed once the desired columns are selected.
+
+The three live listings can filter exact, case-insensitive values and refresh
+until interrupted. Comma-separated values are alternatives for one key;
+different keys must all match. `--count` makes a watch bounded for automation,
+while `--interval` changes the one-second default:
+
+```bash
+kranz ps --filter state=running --filter client=mcp
+kranz clients --filter client=mcp,tui --watch --count 5
+kranz status --filter state=running,unhealthy --watch --interval 2s
+```
+
+`ps` filters `name`, `project`, `state`, or `client`; `clients` filters
+`runtime`, `project`, `client`, `surface`, or `label`; and `status` filters
+`name`, `state`, or `health` after resolving selectors. Watch mode accepts text
+or template output because concatenated JSON documents would not be valid.
 
 Every `ps` row is an independently owned lifecycle runtime. A TUI, foreground
 log stream, CLI command, and MCP server are clients of that session — they
@@ -247,7 +328,7 @@ entry, supervises nothing, and picks the runtime per call: the tool's `runtime`
 argument, then the `-C`/`-p` pin, then the directory it was started in, then an
 error carrying the runtimes that would have worked. `-C`, `-f`, and `-p` pin the
 connection to one project and make every other address an error.
-`--attach-only` is accepted and ignored. See the [MCP reference](./mcp.md).
+See the [MCP reference](./mcp.md).
 
 ### Logs
 
@@ -286,8 +367,12 @@ kranz logs analytics/stats --run -1       # the latest run
 kranz logs analytics/stats --run -2       # the run before it
 kranz logs analytics/stats --runs 3       # the last three runs
 kranz logs api --run -1                   # only the newest start of a service
-kranz runs                                # bounded catalog and retention limits
+kranz runs                                # bounded run catalog
 kranz runs api analytics/stats            # narrow catalog by target
+kranz runs --status failed --since 2h     # filter by status and start time
+kranz runs --limit 10                     # newest ten matching runs
+kranz runs --format 'table &lbrace;&lbrace;.Run}}\t&lbrace;&lbrace;.Status}}\t&lbrace;&lbrace;.Duration}}'
+kranz runs retention                      # per-target retention limits
 kranz runs delete api#4 --confirm         # delete one completed run and retained output
 ```
 
@@ -312,9 +397,9 @@ rather than an address and stays silent when it overlaps the start of history.
 ### Actions
 
 ```bash
-kranz action list [OWNER]
-kranz action info OWNER/ACTION
-kranz action run OWNER/ACTION
+kranz actions [OWNER]
+kranz actions info OWNER/ACTION
+kranz actions run OWNER/ACTION
 ```
 
 An action is identified by owner and name together, so a service action and an
@@ -384,7 +469,7 @@ Failures use the same envelope with an `error` object, and stdout stays valid
 JSON so a script never has to parse prose:
 
 ```console
-$ kranz list --output json
+$ kranz services --output json
 {"schema_version":1,"error":{"code":"no_project","message":"no Kranz configuration was found in this directory","hint":"Run from a project directory or pass -f PATH."}}
 ```
 
