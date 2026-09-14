@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -19,6 +20,9 @@ type Options struct {
 	HealthChecker   *health.Checker
 	ListenerScanner port.ListenerScanner
 	SessionID       string
+	// LoadOptions preserves the composition request (not merely its expanded
+	// file list) so reload can discover newly added and removed sources.
+	LoadOptions *config.LoadOptions
 }
 
 // Local implements API directly over a service.Manager living in this
@@ -49,12 +53,16 @@ type Local struct {
 	reloadBusy     bool
 	lastConfigScan time.Time
 	stamps         map[string]configStamp
+	loadOptions    *config.LoadOptions
 }
 
 // NewLocal constructs the runtime for one project and starts it observing
 // health and ports. configPaths is the set of files Reload re-reads; it
 // defaults to cfg.Paths when empty, matching how Kranz discovered the
-// configuration in the first place.
+// configuration in the first place. When opts.LoadOptions is set it takes
+// precedence and configPaths is ignored, because reloading must re-resolve the
+// composition request — discovery, globs, and ordered overrides included — not
+// merely re-read an expanded file list.
 func NewLocal(cfg *config.Config, configPaths []string, opts Options) *Local {
 	manager := service.NewManager(cfg)
 
@@ -75,12 +83,26 @@ func NewLocal(cfg *config.Config, configPaths []string, opts Options) *Local {
 	manager.SetListenerScanner(listenerScanner)
 
 	paths := append([]string(nil), configPaths...)
-	if len(paths) == 0 {
+	if opts.LoadOptions != nil {
+		paths = append([]string(nil), opts.LoadOptions.Sources...)
+	} else if len(paths) == 0 {
 		paths = append([]string(nil), cfg.Paths...)
 	}
-	watchPaths := watchedConfigPaths(paths, cfg.WatchPaths)
-	stamps, _ := readConfigStamps(watchPaths)
+	watchPaths := watchedConfigPaths(cfg.Paths, cfg.WatchPaths)
+	stamps, stampErr := readConfigStamps(watchPaths)
+	initialReloadError := ""
+	if stampErr != nil {
+		// A watch-path scan that fails at construction is surfaced rather than
+		// swallowed: change detection is degraded until the path is readable
+		// again, and a silent failure would look like a project that never
+		// changes.
+		initialReloadError = "watch configuration: " + stampErr.Error()
+	}
 
+	loadOptions := cloneLoadOptions(opts.LoadOptions)
+	if loadOptions != nil && loadOptions.Cache == nil {
+		loadOptions.Cache = config.NewSourceCache()
+	}
 	return &Local{
 		manager:       manager,
 		healthChecker: healthChecker,
@@ -92,8 +114,20 @@ func NewLocal(cfg *config.Config, configPaths []string, opts Options) *Local {
 		watchPaths:    watchPaths,
 		generation:    1,
 		loadedAt:      time.Now(),
+		lastReloadErr: initialReloadError,
 		stamps:        stamps,
+		loadOptions:   loadOptions,
 	}
+}
+
+func cloneLoadOptions(options *config.LoadOptions) *config.LoadOptions {
+	if options == nil {
+		return nil
+	}
+	clone := *options
+	clone.Sources = append([]string(nil), options.Sources...)
+	clone.Overrides = append([]string(nil), options.Overrides...)
+	return &clone
 }
 
 var _ API = (*Local)(nil)
@@ -118,19 +152,90 @@ func (l *Local) Project() ProjectSnapshot {
 		Generation:      l.generation,
 		LoadedAt:        l.loadedAt,
 		LastReloadError: l.lastReloadErr,
+		Sources:         append([]config.ConfigSource(nil), l.cfg.Sources...),
+		Diagnostics:     append([]config.CompositionDiagnostic(nil), l.cfg.CompositionDiagnostics...),
+		Pending:         l.manager.PendingChanges(),
+		Composition:     l.compositionRequest(),
 	}
 }
 
+// ProjectComposition returns the request the shared composer can replay, so a
+// client or delivery surface can rebuild the same effective graph without
+// guessing at discovery roots or override order. It is the cross-process
+// counterpart of ProjectSnapshot.Composition, which JSON deliberately omits
+// because the request names absolute paths.
+func (l *Local) ProjectComposition() *CompositionRequest {
+	l.cfgMu.RLock()
+	defer l.cfgMu.RUnlock()
+	return l.compositionRequest()
+}
+
+// compositionRequest reports a request the shared composer can replay, so a
+// client or delivery surface can rebuild the same effective graph without
+// guessing at discovery roots or override order. A runtime built from an
+// already-resolved file list synthesizes {Directory, Sources} from those paths;
+// the result is nil only when there is nothing to replay, meaning neither a
+// load option nor a config path was recorded.
+func (l *Local) compositionRequest() *CompositionRequest {
+	request := CompositionRequest{}
+	if l.loadOptions != nil {
+		request = CompositionRequest{
+			Directory:      l.loadOptions.Directory,
+			Sources:        append([]string(nil), l.loadOptions.Sources...),
+			Overrides:      append([]string(nil), l.loadOptions.Overrides...),
+			FollowSymlinks: l.loadOptions.FollowSymlinks,
+		}
+	} else if len(l.configPaths) > 0 {
+		request = CompositionRequest{
+			Directory: filepath.Dir(l.configPaths[0]),
+			Sources:   append([]string(nil), l.configPaths...),
+		}
+	}
+	if !request.Configured() {
+		return nil
+	}
+	return &request
+}
+
 func (l *Local) snapshotOf(svc *service.Service) *ServiceSnapshot {
+	identity := l.manager.ServiceIdentity(svc.Name)
+	sourcePath := ""
+	for _, source := range l.manager.Config().Sources {
+		if source.ID == identity.SourceID {
+			sourcePath = source.DisplayPath
+			break
+		}
+	}
+	l.cfgMu.RLock()
+	generationNumber := l.generation
+	l.cfgMu.RUnlock()
+	generation := fmt.Sprintf("%d", generationNumber)
+	runtimeRevision, reloadState := generation, "current"
+	reloadReason := ""
+	if change, pending := l.manager.PendingChangeFor(svc.Name); pending {
+		reloadState = "pending_restart"
+		reloadReason = change.Reason
+		if generationNumber > 1 {
+			runtimeRevision = fmt.Sprintf("%d", generationNumber-1)
+		}
+	}
 	snapshot := &ServiceSnapshot{
-		Name:           svc.Name,
-		Config:         svc.Config,
-		State:          svc.GetState(),
-		DetectedPorts:  svc.DetectedPorts(),
-		DesiredRunning: svc.DesiredRunning(),
-		StatusObserved: svc.LifecycleStatusObserved(),
-		CanStart:       svc.CanStart(),
-		CanStop:        svc.CanStop(),
+		ID:              identity.ID,
+		Name:            svc.Name,
+		SourceName:      identity.SourceName,
+		SourceID:        identity.SourceID,
+		SourcePath:      sourcePath,
+		RuntimeRevision: runtimeRevision,
+		DesiredRevision: generation,
+		ReloadState:     reloadState,
+		ReloadReason:    reloadReason,
+		Config:          svc.Config,
+		State:           svc.GetState(),
+		DetectedPorts:   svc.DetectedPorts(),
+		DesiredRunning:  svc.DesiredRunning(),
+		StatusObserved:  svc.LifecycleStatusObserved(),
+		CanStart:        svc.CanStart(),
+		CanStop:         svc.CanStop(),
 	}
 	if l.healthChecker != nil {
 		if h := l.healthChecker.GetHealth(svc.Name); h != nil {
@@ -295,23 +400,39 @@ func (l *Local) StopAll() error {
 }
 
 func (l *Local) RestartAll() error {
-	return l.manager.RestartAll()
+	err := l.manager.RestartAll()
+	l.syncAcceptedConfig()
+	return err
 }
 
 func (l *Local) RestartAllContext(ctx context.Context) error {
-	return l.manager.RestartAllContext(ctx)
+	err := l.manager.RestartAllContext(ctx)
+	l.syncAcceptedConfig()
+	return err
 }
 
 func (l *Local) RestartService(name string) error {
-	return l.manager.RestartService(name)
+	err := l.manager.RestartService(name)
+	l.syncAcceptedConfig()
+	return err
 }
 
 func (l *Local) RestartServices(names []string) error {
-	return l.manager.RestartServices(names)
+	err := l.manager.RestartServices(names)
+	l.syncAcceptedConfig()
+	return err
 }
 
 func (l *Local) RestartServicesContext(ctx context.Context, names []string) error {
-	return l.manager.RestartServicesContext(ctx, names)
+	err := l.manager.RestartServicesContext(ctx, names)
+	l.syncAcceptedConfig()
+	return err
+}
+
+func (l *Local) syncAcceptedConfig() {
+	l.cfgMu.Lock()
+	l.cfg = l.manager.Config()
+	l.cfgMu.Unlock()
 }
 
 func (l *Local) HasRunningServices() bool {

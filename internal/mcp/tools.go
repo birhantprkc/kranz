@@ -243,6 +243,13 @@ func (s *scope) selectedServices(selectors []string) ([]*app.ServiceSnapshot, er
 	}
 	names, err := app.ResolveServiceSelectors(s.api.Config(), selectors)
 	if err != nil {
+		// A pending removal remains addressable by its accepted runtime name
+		// even though it is absent from the desired effective config.
+		if len(selectors) == 1 {
+			if service, ok := s.api.Service(selectors[0]); ok && service != nil {
+				return []*app.ServiceSnapshot{service}, nil
+			}
+		}
 		return nil, err
 	}
 	services := make([]*app.ServiceSnapshot, 0, len(names))
@@ -718,7 +725,7 @@ func (s *scope) reloadTool(_ context.Context, raw json.RawMessage) ResultEnvelop
 		return s.errorEnvelope(err)
 	}
 	project := s.api.Project()
-	return s.envelope(map[string]any{"generation": project.Generation, "loaded_at": project.LoadedAt, "added": result.Added, "removed": result.Removed, "updated": result.Updated, "restarted": result.Restarted})
+	return s.envelope(map[string]any{"generation": project.Generation, "loaded_at": project.LoadedAt, "added": result.Added, "removed": result.Removed, "updated": result.Updated})
 }
 
 func (s *scope) doctorTool(_ context.Context, raw json.RawMessage) ResultEnvelope {

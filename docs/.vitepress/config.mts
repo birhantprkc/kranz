@@ -47,6 +47,7 @@ export default defineConfig({
         text: 'Workflows',
         items: [
           { text: 'Configuration', link: '/guide/configuration' },
+          { text: 'Composing configurations', link: '/guide/composition' },
           { text: 'Lifecycle', link: '/guide/lifecycle' },
           { text: 'Actions', link: '/guide/actions' },
           { text: 'Health and dependencies', link: '/guide/health-and-dependencies' },
@@ -67,6 +68,13 @@ export default defineConfig({
         ]
       },
       {
+        text: 'Upgrading',
+        items: [
+          { text: 'Upgrading to 0.15', link: '/releases/0.15.0' },
+          { text: 'Upgrading to 0.8', link: '/releases/0.8.0' }
+        ]
+      },
+      {
         text: 'Runnable examples',
         items: [
           { text: 'Choose an example', link: '/examples' },
@@ -76,6 +84,7 @@ export default defineConfig({
           { text: 'Detached lifecycle', link: '/examples/lifecycle' },
           { text: 'Prerequisites', link: '/examples/prerequisites' },
           { text: 'Process Compose', link: '/examples/process-compose' },
+          { text: 'Configuration composition', link: '/examples/composition' },
           { text: 'Full dependency graph', link: '/examples/full-stack' },
           { text: 'Runtime ports', link: '/examples/runtime-ports' },
           { text: 'MCP shared runtime', link: '/examples/mcp-shared-runtime' }

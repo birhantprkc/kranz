@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,42 +23,22 @@ import (
 // first `up` and never disturb a running one.
 
 // loadProject reads the effective configuration the command should describe,
-// honoring -C and repeated -f exactly like the runtime commands do.
+// honoring -C, repeated -f, --override, and --follow-symlinks exactly like the
+// runtime commands do.
 func loadProject(options kranzcli.GlobalOptions) (*config.Config, []string, error) {
-	original, err := os.Getwd()
+	cfg, err := config.Compose(config.LoadOptions{
+		Directory:      options.Directory,
+		Sources:        options.ConfigPaths,
+		Overrides:      options.OverridePaths,
+		FollowSymlinks: options.FollowSymlinks,
+	})
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := os.Chdir(options.Directory); err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = os.Chdir(original) }() // best effort; the configuration is fully read before returning
-	paths := options.ConfigPaths
-	if len(paths) == 0 {
-		paths, err = config.DiscoverFiles(".")
-		if err != nil {
-			return nil, nil, &kranzcli.Error{
-				Code:     "no_project",
-				Message:  "no Kranz configuration was found in this directory",
-				Hint:     "Run from a project directory or pass -f PATH.",
-				ExitCode: kranzcli.ExitUsage,
-				Cause:    err,
-			}
+		if errors.Is(err, config.ErrConfigNotFound) {
+			return nil, nil, &kranzcli.Error{Code: "no_project", Message: "no Kranz configuration was found directly or through discovery", Hint: "Run from a project directory or pass -f PATH.", ExitCode: kranzcli.ExitUsage, Cause: err}
 		}
-	}
-	cfg, err := config.LoadFiles(paths)
-	if err != nil {
 		return nil, nil, &kranzcli.Error{Code: "invalid_config", Message: "configuration is not valid", ExitCode: kranzcli.ExitConfig, Cause: err}
 	}
-	absolute := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if filepath.IsAbs(path) {
-			absolute = append(absolute, path)
-			continue
-		}
-		absolute = append(absolute, filepath.Join(options.Directory, path))
-	}
-	return cfg, absolute, nil
+	return cfg, append([]string(nil), cfg.Paths...), nil
 }
 
 // selectServices resolves positional selectors, which name either a service or
@@ -76,6 +55,45 @@ func selectServices(cfg *config.Config, selectors []string) ([]string, error) {
 	return resolveServiceSelectors(cfg, selectors)
 }
 
+// resolveSingleService resolves a selector that must name exactly one service.
+// It accepts every form the runtime commands accept — display name, stable ID,
+// unique source name, or tag — so `config explain` and `services info` cannot
+// disagree with `kranz start` about what a selector means. A tag or repeated
+// source name that matches several services is reported with the qualified
+// display names instead of a generic not-found hint.
+func resolveSingleService(cfg *config.Config, selector string) (string, error) {
+	names, err := resolveServiceSelectors(cfg, []string{selector})
+	if err != nil {
+		return "", singleServiceResolveError(err, selector)
+	}
+	if len(names) != 1 {
+		return "", &kranzcli.Error{
+			Code:     "selector_ambiguous",
+			Message:  fmt.Sprintf("service selector %q matches %d services", selector, len(names)),
+			Hint:     "Choose one of: " + strings.Join(names, ", "),
+			ExitCode: kranzcli.ExitUsage,
+		}
+	}
+	return names[0], nil
+}
+
+// singleServiceResolveError keeps the released service_not_found contract for
+// commands that address one service: a selector that names nothing is a missing
+// service, not the log query's selector_not_found. Ambiguity keeps its own code
+// so a caller can tell "no such service" from "too many services match".
+func singleServiceResolveError(err error, selector string) error {
+	var commandErr *kranzcli.Error
+	if errors.As(err, &commandErr) && commandErr.Code == "selector_not_found" {
+		return &kranzcli.Error{
+			Code:     "service_not_found",
+			Message:  fmt.Sprintf("service %q was not found", selector),
+			Hint:     "Run `kranz services` to see what this project defines.",
+			ExitCode: kranzcli.ExitNotFound,
+		}
+	}
+	return err
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -86,7 +104,7 @@ func containsString(values []string, want string) bool {
 }
 
 func runConfigCheck(options kranzcli.GlobalOptions, stdout io.Writer) error {
-	cfg, paths, err := loadProject(options)
+	cfg, _, err := loadProject(options)
 	if err != nil {
 		return err
 	}
@@ -98,11 +116,11 @@ func runConfigCheck(options kranzcli.GlobalOptions, stdout io.Writer) error {
 			Services    int      `json:"services"`
 			Actions     int      `json:"actions"`
 			Diagnostics []string `json:"diagnostics"`
-		}{cfg.Project, cfg.RuntimeName(), paths, len(cfg.Services), len(cfg.ActionIDs()), emptyIfNil(cfg.Diagnostics)})
+		}{cfg.Project, cfg.RuntimeName(), configDisplayPaths(cfg), len(cfg.Services), len(cfg.ActionIDs()), emptyIfNil(cfg.Diagnostics)})
 	}
 	_, _ = fmt.Fprintf(stdout, "Configuration is valid.\n\nProject:  %s\nRuntime:  %s\nServices: %d\nActions:  %d\n", cfg.Project, cfg.RuntimeName(), len(cfg.Services), len(cfg.ActionIDs()))
 	_, _ = fmt.Fprintf(stdout, "\nLayers:\n")
-	for _, path := range paths {
+	for _, path := range configDisplayPaths(cfg) {
 		_, _ = fmt.Fprintf(stdout, "  %s\n", path)
 	}
 	if len(cfg.Diagnostics) > 0 {
@@ -112,6 +130,17 @@ func runConfigCheck(options kranzcli.GlobalOptions, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func configDisplayPaths(cfg *config.Config) []string {
+	paths := make([]string, 0, len(cfg.Sources))
+	for _, source := range cfg.Sources {
+		if source.IsVirtualRoot() {
+			continue
+		}
+		paths = append(paths, source.DisplayPath)
+	}
+	return paths
 }
 
 func runServices(options kranzcli.GlobalOptions, args []string, stdout io.Writer) error {
@@ -284,16 +313,11 @@ func runServiceInfo(options kranzcli.GlobalOptions, args []string, stdout io.Wri
 	if err != nil {
 		return err
 	}
-	name := args[0]
-	svc, ok := cfg.Services[name]
-	if !ok {
-		return &kranzcli.Error{
-			Code:     "service_not_found",
-			Message:  fmt.Sprintf("service %q was not found", name),
-			Hint:     "Run `kranz services` to see what this project defines.",
-			ExitCode: kranzcli.ExitNotFound,
-		}
+	name, resolveErr := resolveSingleService(cfg, args[0])
+	if resolveErr != nil {
+		return resolveErr
 	}
+	svc := cfg.Services[name]
 	return serviceInfo(cfg, name, svc, runtimeSnapshots(options)[name], options, stdout)
 }
 
