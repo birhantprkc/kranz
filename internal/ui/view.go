@@ -302,10 +302,24 @@ func (m *Model) actionButtons() []actionButton {
 	if allRunning {
 		forceLabel = "Force stop: S"
 	}
+	// Only overlapping operations block the toggle. A disjoint in-flight start
+	// (for example a docs server with no dependency relation) must not disable
+	// this selection, matching what beginCancelableOperation now allows.
+	toggleKind := operationStartSet
+	if allActive {
+		toggleKind = operationStopSet
+	}
+	toggleNames := m.operationAffectedServices(toggleKind, targets)
 	interruptibleStart := false
-	switch m.operationKind {
-	case operationStart, operationStartSet:
-		interruptibleStart = m.operationCancel != nil && allActive
+	blockedByOperation := false
+	for _, op := range m.operations {
+		if !setsIntersect(toggleNames, op.services) {
+			continue
+		}
+		blockedByOperation = true
+	}
+	if blockedByOperation {
+		interruptibleStart = m.canInterruptOperations(toggleKind, m.overlappingOperations(toggleNames))
 	}
 	if actionFocused {
 		toggleStyle = PrimaryButtonStyle
@@ -316,7 +330,7 @@ func (m *Model) actionButtons() []actionButton {
 			toggleLabel = "■ Stop action: s"
 			compactToggle = "Stop: s"
 		}
-	} else if !canToggle || (m.operation != "" && !interruptibleStart) {
+	} else if !canToggle || (blockedByOperation && !interruptibleStart) {
 		toggleStyle = DisabledButtonStyle
 	}
 	if m.width < 100 {

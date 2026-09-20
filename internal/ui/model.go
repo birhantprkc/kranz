@@ -312,6 +312,7 @@ type Model struct {
 	operationKind       operationKind
 	operationID         int
 	operationCancel     context.CancelFunc
+	operations          map[int]*activeOperation
 	keys                KeyMap
 	userSettings        usersettings.Settings
 	settingsPath        string
@@ -501,6 +502,7 @@ func NewModelWithOptions(cfg *config.Config, version string, options ModelOption
 		configGeneration:    project.Generation,
 		notifications:       make([]config.Notification, 0),
 		conflictPorts:       make(map[int]*config.PortInfo),
+		operations:          make(map[int]*activeOperation),
 		configPaths:         append([]string(nil), options.ConfigPaths...),
 		rpcClient:           rpcClient,
 		registry:            options.Registry,

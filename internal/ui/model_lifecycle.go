@@ -19,9 +19,7 @@ import (
 // Shutdown is the idempotent cleanup boundary for every application exit path.
 func (m *Model) Shutdown() error {
 	m.shutdownOnce.Do(func() {
-		if m.operationCancel != nil {
-			m.operationCancel()
-		}
+		m.abortAllOperations()
 		if !m.detachOnExit {
 			m.shutdownErr = m.app.Shutdown()
 		}
@@ -53,14 +51,13 @@ func (m *Model) handleLifecycleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.toggleAllSelection()
 		return m, nil, true
 	case key.Matches(msg, m.keys.StopAll):
-		m.cancelStartOperation()
 		names := m.cfg.ServiceNames()
 		if m.requiresStopConfirmation(names) {
 			model, command := m.beginServiceStopConfirmation(names, "all services", false)
 			m.pendingStopAll = true
 			return model, command, true
 		}
-		model, command := m.beginOperation(operationStopAll, "all services", "Stopping all services", m.app.StopAll)
+		model, command := m.beginOperation(operationStopAll, "all services", "Stopping all services", nil, m.app.StopAll)
 		return model, command, true
 	case key.Matches(msg, m.keys.Restart):
 		model, command := m.restartSelectedService()
@@ -73,7 +70,7 @@ func (m *Model) handleLifecycleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.confirmRestartAll = true
 			return m, nil, true
 		}
-		model, command := m.beginOperation(operationRestartAll, "running services", "Restarting services", m.app.RestartAll)
+		model, command := m.beginOperation(operationRestartAll, "running services", "Restarting services", nil, m.app.RestartAll)
 		return model, command, true
 	default:
 		return m, nil, false
@@ -159,7 +156,7 @@ func (m *Model) startSelectedService() (tea.Model, tea.Cmd) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	application := m.app
-	return m.beginCancelableOperation(operationStart, svc.Name, "Starting "+svc.Name, cancel, func() error {
+	return m.beginCancelableOperation(operationStart, svc.Name, "Starting "+svc.Name, []string{svc.Name}, cancel, func() error {
 		return application.StartServicesContext(ctx, []string{svc.Name})
 	})
 }
@@ -246,12 +243,11 @@ func (m *Model) toggleSelectedServices() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		m.cancelStartOperation()
 		if m.requiresStopConfirmation(names) {
 			return m.beginServiceStopConfirmation(names, target, false)
 		}
 		application := m.app
-		return m.beginOperation(operationStopSet, target, "Stopping "+target, func() error {
+		return m.beginOperation(operationStopSet, target, "Stopping "+target, names, func() error {
 			return application.StopServices(names)
 		})
 	}
@@ -267,7 +263,7 @@ func (m *Model) toggleSelectedServices() (tea.Model, tea.Cmd) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	application := m.app
-	return m.beginCancelableOperation(operationStartSet, target, "Starting "+target, cancel, func() error {
+	return m.beginCancelableOperation(operationStartSet, target, "Starting "+target, names, cancel, func() error {
 		return application.StartServicesContext(ctx, names)
 	})
 }
@@ -277,10 +273,6 @@ func (m *Model) forceToggleSelectedServices() (tea.Model, tea.Cmd) {
 	if len(names) == 0 {
 		return m, nil
 	}
-	// Shift+S is also an escape hatch from an in-flight dependency gate. The
-	// stale dependency-aware result is ignored because beginOperation advances
-	// the operation ID before starting the direct targets.
-	m.cancelStartOperation()
 	target := m.selectedTargetLabel(names)
 	allRunning := true
 	for _, name := range names {
@@ -302,7 +294,7 @@ func (m *Model) forceToggleSelectedServices() (tea.Model, tea.Cmd) {
 			return m.beginServiceStopConfirmation(names, target, true)
 		}
 		application := m.app
-		return m.beginOperation(operationForceStop, target, "Force stopping "+target, func() error {
+		return m.beginOperation(operationForceStop, target, "Force stopping "+target, names, func() error {
 			return application.ForceStopServices(names)
 		})
 	}
@@ -317,7 +309,7 @@ func (m *Model) forceToggleSelectedServices() (tea.Model, tea.Cmd) {
 		return m.beginServiceStartConfirmation(names, target, true)
 	}
 	application := m.app
-	return m.beginOperation(operationForceStart, target, "Force starting "+target, func() error {
+	return m.beginOperation(operationForceStart, target, "Force starting "+target, names, func() error {
 		return application.ForceStartServices(names)
 	})
 }
@@ -341,13 +333,13 @@ func (m *Model) confirmServiceStart() (tea.Model, tea.Cmd) {
 	m.cancelServiceStartConfirmation()
 	if force {
 		application := m.app
-		return m.beginOperation(operationForceStart, target, "Force starting "+target, func() error {
+		return m.beginOperation(operationForceStart, target, "Force starting "+target, names, func() error {
 			return application.ForceStartServices(names)
 		})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	application := m.app
-	return m.beginCancelableOperation(operationStartSet, target, "Starting "+target, cancel, func() error {
+	return m.beginCancelableOperation(operationStartSet, target, "Starting "+target, names, cancel, func() error {
 		return application.StartServicesContext(ctx, names)
 	})
 }
@@ -408,16 +400,16 @@ func (m *Model) confirmServiceStop() (tea.Model, tea.Cmd) {
 	stopAll := m.pendingStopAll
 	m.cancelServiceStopConfirmation()
 	if stopAll {
-		return m.beginOperation(operationStopAll, target, "Stopping all services", m.app.StopAll)
+		return m.beginOperation(operationStopAll, target, "Stopping all services", nil, m.app.StopAll)
 	}
 	if force {
 		application := m.app
-		return m.beginOperation(operationForceStop, target, "Force stopping "+target, func() error {
+		return m.beginOperation(operationForceStop, target, "Force stopping "+target, names, func() error {
 			return application.ForceStopServices(names)
 		})
 	}
 	application := m.app
-	return m.beginOperation(operationStopSet, target, "Stopping "+target, func() error {
+	return m.beginOperation(operationStopSet, target, "Stopping "+target, names, func() error {
 		return application.StopServices(names)
 	})
 }
@@ -440,31 +432,54 @@ func (m *Model) handleConfirmServiceStopKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
+// activeOperation is one in-flight lifecycle operation. The dashboard runs
+// more than one at a time when their target service sets are disjoint, so it
+// tracks each operation's identity, label, cancellation, and claimed services
+// instead of a single scalar.
+type activeOperation struct {
+	id       int
+	kind     operationKind
+	label    string
+	cancel   context.CancelFunc
+	services map[string]bool
+}
+
 func (m *Model) beginRestart(name string) (tea.Model, tea.Cmd) {
 	m.mode = ModeNormal
 	application := m.app
-	return m.beginOperation(operationRestart, name, "Restarting "+name, func() error {
+	return m.beginOperation(operationRestart, name, "Restarting "+name, []string{name}, func() error {
 		return application.RestartService(name)
 	})
 }
 
-func (m *Model) beginOperation(kind operationKind, target, label string, operation func() error) (tea.Model, tea.Cmd) {
-	return m.beginCancelableOperation(kind, target, label, nil, operation)
+func (m *Model) beginOperation(kind operationKind, target, label string, services []string, operation func() error) (tea.Model, tea.Cmd) {
+	return m.beginCancelableOperation(kind, target, label, services, nil, operation)
 }
 
-func (m *Model) beginCancelableOperation(kind operationKind, target, label string, cancel context.CancelFunc, operation func() error) (tea.Model, tea.Cmd) {
-	if m.operation != "" {
-		if cancel != nil {
-			cancel()
+// beginCancelableOperation starts a lifecycle operation unless its affected
+// services overlap an operation already in flight. Disjoint operations run
+// concurrently, so starting an independent service (for example a standalone
+// docs server) is never blocked behind another service's dependency gate.
+// Force start and force stop are explicit overrides: they cancel whatever they
+// overlap so the focused targets can change state immediately.
+func (m *Model) beginCancelableOperation(kind operationKind, target, label string, services []string, cancel context.CancelFunc, operation func() error) (tea.Model, tea.Cmd) {
+	affected := m.operationAffectedServices(kind, services)
+	if overlapping := m.overlappingOperations(affected); len(overlapping) > 0 {
+		if m.canInterruptOperations(kind, overlapping) {
+			m.abortOperations(overlapping)
+		} else {
+			if cancel != nil {
+				cancel()
+			}
+			m.addNotification("system", "Wait for the current operation: "+newestOperation(overlapping).label, config.LogWarn)
+			return m, nil
 		}
-		m.addNotification("system", "Wait for the current operation: "+m.operation, config.LogWarn)
-		return m, nil
 	}
-	m.operation = label
-	m.operationKind = kind
-	m.operationCancel = cancel
 	m.operationID++
-	operationID, sessionGen := m.operationID, m.sessionGeneration
+	op := &activeOperation{id: m.operationID, kind: kind, label: label, cancel: cancel, services: affected}
+	m.operations[op.id] = op
+	m.refreshOperationMirror()
+	operationID, sessionGen := op.id, m.sessionGeneration
 	release := retainRuntimeApplication(m.app)
 	return m, func() tea.Msg {
 		defer release()
@@ -472,25 +487,213 @@ func (m *Model) beginCancelableOperation(kind operationKind, target, label strin
 	}
 }
 
-func (m *Model) cancelStartOperation() {
-	switch m.operationKind {
+// operationAffectedServices is the set of services an operation may touch.
+// Two operations whose sets do not intersect cannot race on the same service.
+func (m *Model) operationAffectedServices(kind operationKind, names []string) map[string]bool {
+	switch kind {
 	case operationStart, operationStartSet:
-		if m.operationCancel != nil {
-			m.operationCancel()
-		}
-		m.operation = ""
-		m.operationKind = ""
-		m.operationCancel = nil
+		return m.dependencyClosure(names)
+	case operationStopSet:
+		return m.dependentClosure(names)
+	case operationRestart:
+		return m.restartAffectedServices(names)
+	case operationForceStart, operationForceStop:
+		return nameSet(names)
+	case operationStopAll, operationRestartAll:
+		return m.allServiceNames()
+	default:
+		return nameSet(names)
 	}
 }
 
+// dependencyClosure expands names with every transitive dependency, mirroring
+// the include-dependencies walk StartServicesContext performs.
+func (m *Model) dependencyClosure(names []string) map[string]bool {
+	closure := make(map[string]bool, len(names))
+	var visit func(string)
+	visit = func(name string) {
+		if closure[name] {
+			return
+		}
+		closure[name] = true
+		svc, ok := m.cfg.Services[name]
+		if !ok {
+			return
+		}
+		for _, dependency := range svc.DependsOn {
+			visit(dependency)
+		}
+	}
+	for _, name := range names {
+		visit(name)
+	}
+	return closure
+}
+
+// dependentClosure expands names with every transitive dependent, the set
+// StopServices touches.
+func (m *Model) dependentClosure(names []string) map[string]bool {
+	closure := nameSet(names)
+	graph := m.cfg.GetDependsOn()
+	for changed := true; changed; {
+		changed = false
+		for name, dependencies := range graph {
+			if closure[name] {
+				continue
+			}
+			for _, dependency := range dependencies {
+				if closure[dependency] {
+					closure[name] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return closure
+}
+
+func (m *Model) restartAffectedServices(names []string) map[string]bool {
+	dependents := m.dependentClosure(names)
+	expanded := make([]string, 0, len(dependents))
+	for name := range dependents {
+		expanded = append(expanded, name)
+	}
+	return unionSets(m.dependencyClosure(expanded), dependents)
+}
+
+func (m *Model) allServiceNames() map[string]bool {
+	return nameSet(m.cfg.ServiceNames())
+}
+
+func nameSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, name := range names {
+		set[name] = true
+	}
+	return set
+}
+
+func unionSets(left, right map[string]bool) map[string]bool {
+	union := make(map[string]bool, len(left)+len(right))
+	for name := range left {
+		union[name] = true
+	}
+	for name := range right {
+		union[name] = true
+	}
+	return union
+}
+
+func setsIntersect(left, right map[string]bool) bool {
+	small, large := left, right
+	if len(small) > len(large) {
+		small, large = large, small
+	}
+	for name := range small {
+		if large[name] {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) overlappingOperations(affected map[string]bool) []*activeOperation {
+	var overlapping []*activeOperation
+	for _, op := range m.operations {
+		if setsIntersect(op.services, affected) {
+			overlapping = append(overlapping, op)
+		}
+	}
+	return overlapping
+}
+
+// canInterruptOperations preserves the dashboard's stop/force escape hatch
+// without racing an operation that cannot actually be cancelled. Only starts
+// blocked in a dependency or prerequisite wait carry cancellation handles.
+func (m *Model) canInterruptOperations(kind operationKind, operations []*activeOperation) bool {
+	switch kind {
+	case operationStopSet, operationStopAll, operationForceStart, operationForceStop:
+	default:
+		return false
+	}
+	for _, op := range operations {
+		if op.cancel == nil || (op.kind != operationStart && op.kind != operationStartSet) {
+			return false
+		}
+	}
+	return true
+}
+
+func newestOperation(operations []*activeOperation) *activeOperation {
+	newest := operations[0]
+	for _, op := range operations[1:] {
+		if op.id > newest.id {
+			newest = op
+		}
+	}
+	return newest
+}
+
+func (m *Model) abortOperations(operations []*activeOperation) {
+	for _, op := range operations {
+		if op.cancel != nil {
+			op.cancel()
+		}
+		delete(m.operations, op.id)
+	}
+	m.refreshOperationMirror()
+}
+
+func (m *Model) abortAllOperations() {
+	for _, op := range m.operations {
+		if op.cancel != nil {
+			op.cancel()
+		}
+	}
+	m.operations = make(map[int]*activeOperation)
+	m.refreshOperationMirror()
+}
+
+// refreshOperationMirror keeps the single-valued display fields in sync with
+// the newest tracked operation; the view and the legacy tests read them.
+func (m *Model) refreshOperationMirror() {
+	var newest *activeOperation
+	for _, op := range m.operations {
+		if newest == nil || op.id > newest.id {
+			newest = op
+		}
+	}
+	if newest == nil {
+		m.operation = ""
+		m.operationKind = ""
+		m.operationCancel = nil
+		return
+	}
+	m.operation = newest.label
+	m.operationKind = newest.kind
+	m.operationCancel = newest.cancel
+}
+
+func (m *Model) cancelStartOperation() {
+	for id, op := range m.operations {
+		if op.kind == operationStart || op.kind == operationStartSet {
+			if op.cancel != nil {
+				op.cancel()
+			}
+			delete(m.operations, id)
+		}
+	}
+	m.refreshOperationMirror()
+}
+
 func (m *Model) handleOperationResult(msg operationResultMsg) (tea.Model, tea.Cmd) {
-	if msg.id != m.operationID {
+	if _, ok := m.operations[msg.id]; ok {
+		delete(m.operations, msg.id)
+		m.refreshOperationMirror()
+	} else if msg.id != m.operationID {
 		return m, nil
 	}
-	m.operation = ""
-	m.operationKind = ""
-	m.operationCancel = nil
 	// A snapshot taken before this operation ran is now stale: refresh
 	// immediately rather than waiting for the next 250ms tick, so a test or
 	// a fast follow-up keypress sees the state the operation just produced.
@@ -550,10 +753,7 @@ func (m *Model) beginCloseAndChoose() (tea.Model, tea.Cmd) {
 	if !m.switcherSupported() || m.exiting {
 		return m, nil
 	}
-	if m.operationCancel != nil {
-		m.operationCancel()
-		m.operationCancel = nil
-	}
+	m.abortAllOperations()
 	m.operationID++
 	m.operationKind = ""
 	m.operation = "Closing runtime"
@@ -569,10 +769,7 @@ func (m *Model) beginCloseAndChoose() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) beginExit(operation string) (tea.Model, tea.Cmd) {
-	if m.operationCancel != nil {
-		m.operationCancel()
-		m.operationCancel = nil
-	}
+	m.abortAllOperations()
 	m.operationID++
 	m.operationKind = ""
 	if m.operation != operation {
@@ -616,7 +813,7 @@ func (m *Model) confirmRestart() (tea.Model, tea.Cmd) {
 	if m.confirmRestartAll {
 		m.confirmRestartAll = false
 		m.mode = ModeNormal
-		return m.beginOperation(operationRestartAll, "running services", "Restarting services", m.app.RestartAll)
+		return m.beginOperation(operationRestartAll, "running services", "Restarting services", nil, m.app.RestartAll)
 	}
 	return m.beginRestart(m.confirmTarget)
 }

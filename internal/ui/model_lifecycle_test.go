@@ -737,6 +737,244 @@ func TestDetailsShowLifecycleConfiguration(t *testing.T) {
 	}
 }
 
+// gatedModel builds a project whose "api" start is permanently blocked on
+// "server"'s log line, so its operation stays in flight for a test to race.
+func gatedModel(t *testing.T) *Model {
+	t.Helper()
+	model := NewModel(&config.Config{Project: "Test", Services: map[string]config.Service{
+		"server": {Command: "sleep 60", Dir: ".", Shell: "sh", ReadyLogLine: "NEVER"},
+		"api": {
+			Command: "sleep 60", Dir: ".", Shell: "sh", DependsOn: []string{"server"},
+			DependencyConditions: map[string]config.DependencyConfig{
+				"server": {Condition: config.DependencyLogReady},
+			},
+		},
+		"api2": {
+			Command: "sleep 60", Dir: ".", Shell: "sh", DependsOn: []string{"server"},
+			DependencyConditions: map[string]config.DependencyConfig{
+				"server": {Condition: config.DependencyLogReady},
+			},
+		},
+		"docs": {Command: "sleep 60", Dir: ".", Shell: "sh"},
+	}}, "test")
+	return model
+}
+
+func TestDisjointStartRunsWhileDependencyGateBlocks(t *testing.T) {
+	model := gatedModel(t)
+	defer model.Shutdown()
+	model.selected["api"] = true
+
+	_, first := model.toggleSelectedServices()
+	if first == nil {
+		t.Fatal("dependency-gated start was not scheduled")
+	}
+	firstResult := make(chan operationResultMsg, 1)
+	go func() { firstResult <- first().(operationResultMsg) }()
+	waitForServiceStatus(t, model, "server", config.StatusRunning)
+
+	// docs shares no dependency with the gated api closure, so starting it
+	// must not be serialized behind the api operation.
+	model.selected = map[string]bool{"docs": true}
+	_, second := model.toggleSelectedServices()
+	if second == nil {
+		t.Fatal("start disjoint from the in-flight dependency gate was refused")
+	}
+	_, _ = model.Update(second().(operationResultMsg))
+	docs, _ := model.app.Service("docs")
+	if docs.State.Status != config.StatusRunning {
+		t.Fatalf("docs status = %s, want running beside the gated api start", docs.State.Status)
+	}
+	if len(model.operations) != 1 {
+		t.Fatalf("tracked operations = %d, want the gated api start still in flight", len(model.operations))
+	}
+
+	model.cancelStartOperation()
+	select {
+	case stale := <-firstResult:
+		_, _ = model.Update(stale)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled dependency-gated start did not return promptly")
+	}
+	if len(model.operations) != 0 {
+		t.Fatalf("operations after cancel = %d, want 0", len(model.operations))
+	}
+}
+
+func TestOverlappingStartIsRefusedWhileDependencyGateBlocks(t *testing.T) {
+	model := gatedModel(t)
+	defer model.Shutdown()
+	model.selected["api"] = true
+
+	_, first := model.toggleSelectedServices()
+	if first == nil {
+		t.Fatal("first start was not scheduled")
+	}
+	firstResult := make(chan operationResultMsg, 1)
+	go func() { firstResult <- first().(operationResultMsg) }()
+	waitForServiceStatus(t, model, "server", config.StatusRunning)
+
+	// api2 depends on the same server, so its closure overlaps the in-flight
+	// operation and must be refused rather than racing the shared dependency.
+	model.selected = map[string]bool{"api2": true}
+	_, second := model.toggleSelectedServices()
+	if second != nil {
+		t.Fatal("start sharing a dependency with the in-flight operation was allowed")
+	}
+	if !strings.Contains(model.toastMessage, "Wait for the current operation") {
+		t.Fatalf("refusal notification = %q", model.toastMessage)
+	}
+	if len(model.operations) != 1 {
+		t.Fatalf("tracked operations = %d, want only the original gate", len(model.operations))
+	}
+
+	model.cancelStartOperation()
+	select {
+	case stale := <-firstResult:
+		_, _ = model.Update(stale)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled dependency-gated start did not return promptly")
+	}
+}
+
+func TestStoppingDisjointServiceKeepsDependencyGatedStart(t *testing.T) {
+	model := gatedModel(t)
+	defer model.Shutdown()
+	model.selected["api"] = true
+
+	_, first := model.toggleSelectedServices()
+	firstResult := make(chan operationResultMsg, 1)
+	go func() { firstResult <- first().(operationResultMsg) }()
+	waitForServiceStatus(t, model, "server", config.StatusRunning)
+
+	model.selected = map[string]bool{"docs": true}
+	_, startDocs := model.toggleSelectedServices()
+	_, _ = model.Update(startDocs().(operationResultMsg))
+	_, confirmation := model.toggleSelectedServices()
+	if confirmation != nil || model.mode != ModeConfirmServiceStop {
+		t.Fatal("stopping docs did not open the expected confirmation")
+	}
+	if len(model.operations) != 1 {
+		t.Fatalf("confirmation cancelled disjoint start; tracked operations = %d", len(model.operations))
+	}
+	_, stopDocs := model.confirmServiceStop()
+	if stopDocs == nil {
+		t.Fatal("stop disjoint from the gated start was refused")
+	}
+	_, _ = model.Update(stopDocs().(operationResultMsg))
+	if len(model.operations) != 1 {
+		t.Fatalf("tracked operations = %d, want gated start to remain in flight", len(model.operations))
+	}
+
+	model.cancelStartOperation()
+	select {
+	case stale := <-firstResult:
+		_, _ = model.Update(stale)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled dependency-gated start did not return promptly")
+	}
+}
+
+func TestForceStartDisjointServiceKeepsDependencyGatedStart(t *testing.T) {
+	model := gatedModel(t)
+	defer model.Shutdown()
+	model.selected["api"] = true
+
+	_, first := model.toggleSelectedServices()
+	firstResult := make(chan operationResultMsg, 1)
+	go func() { firstResult <- first().(operationResultMsg) }()
+	waitForServiceStatus(t, model, "server", config.StatusRunning)
+
+	model.selected = map[string]bool{"docs": true}
+	_, forceDocs := model.forceToggleSelectedServices()
+	if forceDocs == nil {
+		t.Fatal("force start disjoint from the gated start was refused")
+	}
+	_, _ = model.Update(forceDocs().(operationResultMsg))
+	if len(model.operations) != 1 {
+		t.Fatalf("tracked operations = %d, want gated start to remain in flight", len(model.operations))
+	}
+
+	model.cancelStartOperation()
+	select {
+	case stale := <-firstResult:
+		_, _ = model.Update(stale)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled dependency-gated start did not return promptly")
+	}
+}
+
+func TestForceOperationDoesNotRaceUncancelableOverlap(t *testing.T) {
+	model := gatedModel(t)
+	defer model.Shutdown()
+	model.operations[1] = &activeOperation{
+		id:       1,
+		kind:     operationRestart,
+		label:    "Restarting server",
+		services: nameSet([]string{"server"}),
+	}
+	model.operationID = 1
+	model.refreshOperationMirror()
+
+	_, command := model.beginOperation(operationForceStop, "server", "Force stopping server", []string{"server"}, func() error {
+		return nil
+	})
+	if command != nil {
+		t.Fatal("force stop raced an overlapping operation without a cancellation handle")
+	}
+	if len(model.operations) != 1 {
+		t.Fatalf("tracked operations = %d, want original operation retained", len(model.operations))
+	}
+	if !strings.Contains(model.toastMessage, "Restarting server") {
+		t.Fatalf("refusal notification = %q, want the actual overlapping operation", model.toastMessage)
+	}
+}
+
+func TestShutdownCancelsEveryTrackedStart(t *testing.T) {
+	model := gatedModel(t)
+	model.detachOnExit = true
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	model.operations[1] = &activeOperation{id: 1, kind: operationStart, cancel: firstCancel}
+	model.operations[2] = &activeOperation{id: 2, kind: operationStartSet, cancel: secondCancel}
+
+	if err := model.Shutdown(); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	for name, ctx := range map[string]context.Context{"first": firstCtx, "second": secondCtx} {
+		select {
+		case <-ctx.Done():
+		default:
+			t.Fatalf("%s tracked start was not cancelled", name)
+		}
+	}
+	if len(model.operations) != 0 {
+		t.Fatalf("tracked operations after shutdown = %d, want 0", len(model.operations))
+	}
+}
+
+func TestActionButtonsUseDependencyClosureForOperationOverlap(t *testing.T) {
+	model := gatedModel(t)
+	defer model.Shutdown()
+	model.width = 120
+	model.selected = map[string]bool{"api2": true}
+	model.operations[1] = &activeOperation{
+		id:       1,
+		kind:     operationStartSet,
+		label:    "Starting api",
+		services: model.dependencyClosure([]string{"api"}),
+	}
+
+	buttons := model.actionButtons()
+	if len(buttons) == 0 {
+		t.Fatal("actionButtons() returned no buttons")
+	}
+	want := DisabledButtonStyle.Render("▶ Start: s")
+	if buttons[0].rendered != want {
+		t.Fatalf("overlapping dependency start button = %q, want disabled %q", buttons[0].rendered, want)
+	}
+}
+
 func waitForServiceStatus(t *testing.T, model *Model, name string, expected config.ServiceStatus) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

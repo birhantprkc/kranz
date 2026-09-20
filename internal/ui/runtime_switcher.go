@@ -145,6 +145,7 @@ func (m *Model) handleRuntimeListMsg(msg runtimeListMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleCloseAndChooseResult(closeErr error) (tea.Model, tea.Cmd) {
 	m.exiting = false
 	m.detachOnExit = true
+	m.operations = make(map[int]*activeOperation)
 	m.operation = ""
 	m.sessionGeneration++
 	m.mode = ModeRuntimeLost
@@ -286,6 +287,7 @@ func (m *Model) installSession(record kranzruntime.SessionRecord, client *kranzr
 	// Leave its context and connection alone so it can finish there, but do not
 	// let its spinner or cancellation handle block commands in the new runtime.
 	m.operationID++
+	m.operations = make(map[int]*activeOperation)
 	m.operation = ""
 	m.operationKind = ""
 	m.operationCancel = nil
