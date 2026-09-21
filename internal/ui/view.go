@@ -58,6 +58,8 @@ func (m *Model) View() string {
 		content = m.renderRunListView()
 	case ModeRunExport:
 		content = m.renderRunExportView()
+	case ModeParamForm:
+		content = m.renderParamFormView()
 	case ModeConfirmDeleteRun:
 		content = m.renderConfirmDeleteRunView()
 	case ModeRuntimeSwitcher:
@@ -271,7 +273,10 @@ type actionButton struct {
 }
 
 func (m *Model) actionButtons() []actionButton {
-	actionFocused := m.listMode == listServices && m.focusedAction != nil
+	// A parameter row is a setting, not the thing that runs: the run controls
+	// belong to the action's own row and to the command it builds.
+	paramFocused := m.paramRowFocused()
+	actionFocused := m.listMode == listServices && m.focusedAction != nil && !paramFocused
 	actionGroupFocused := m.listMode == listServices && m.focusedActionGroup != ""
 	targets := m.selectedTargetNames()
 	allActive := len(targets) > 0
@@ -341,6 +346,13 @@ func (m *Model) actionButtons() []actionButton {
 		if len(m.allServices) > 0 && len(m.selected) == len(m.allServices) {
 			allLabel = "Clear: a"
 		}
+		if paramFocused {
+			return []actionButton{
+				{action: "configure", rendered: compact(SecondaryButtonStyle, "Form: c")},
+				{action: "disable", rendered: compact(SecondaryButtonStyle, "Disable: d")},
+				{action: "quit", rendered: compact(DangerButtonStyle, "Quit: q")},
+			}
+		}
 		if actionFocused {
 			return []actionButton{
 				{action: "toggle", rendered: compact(toggleStyle, compactToggle)},
@@ -367,12 +379,24 @@ func (m *Model) actionButtons() []actionButton {
 	if len(m.allServices) > 0 && len(m.selected) == len(m.allServices) {
 		allLabel = "Clear all: a"
 	}
-	if actionFocused {
+	// Standing on a setting, the only thing on offer is the form that holds
+	// every setting at once. Start and force start belong to services, and
+	// running belongs to the action's own row.
+	if paramFocused {
 		return []actionButton{
-			{action: "toggle", rendered: toggleStyle.Render(toggleLabel)},
-			{action: "all", rendered: SecondaryButtonStyle.Render(allLabel)},
+			{action: "configure", rendered: SecondaryButtonStyle.Render("◆ Form: c")},
+			{action: "disable", rendered: SecondaryButtonStyle.Render("Disable: d")},
 			{action: "quit", rendered: DangerButtonStyle.Render("Quit: q")},
 		}
+	}
+	if actionFocused {
+		buttons := []actionButton{{action: "toggle", rendered: toggleStyle.Render(toggleLabel)}}
+		if m.actionHasParams(*m.focusedAction) {
+			buttons = append(buttons, actionButton{action: "configure", rendered: SecondaryButtonStyle.Render("◆ Form: c")})
+		}
+		return append(buttons,
+			actionButton{action: "all", rendered: SecondaryButtonStyle.Render(allLabel)},
+			actionButton{action: "quit", rendered: DangerButtonStyle.Render("Quit: q")})
 	}
 	if actionGroupFocused {
 		return []actionButton{

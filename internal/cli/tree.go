@@ -151,7 +151,9 @@ func DefaultTree() *Command {
 				{Flags: "--format TEMPLATE", Summary: "render each action with a Go template; prefix with 'table ' for headers"},
 			}},
 			{Name: "info", Summary: "show action details", Usage: "kranz actions info OWNER/ACTION"},
-			{Name: "run", Summary: "run an action", Usage: "kranz actions run OWNER/ACTION [--confirm]", Options: []Option{
+			{Name: "run", Summary: "run an action", Usage: "kranz actions run OWNER/ACTION [--param NAME=VALUE ...] [--no-param NAME ...] [--confirm]", Options: []Option{
+				{Flags: "--param NAME=VALUE", Summary: "set a parameter of a parameterized action; repeat for a checkbox group"},
+				{Flags: "--no-param NAME", Summary: "omit an optional parameter instead of applying its default; repeatable"},
 				{Flags: "--confirm", Summary: "approve the exact resolved plan for an action with confirm: true"},
 			}},
 		}},

@@ -29,9 +29,24 @@ func (m *Model) Shutdown() error {
 
 func (m *Model) handleLifecycleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if m.listMode == listServices && (m.focusedAction != nil || m.focusedActionGroup != "") {
-		if key.Matches(msg, m.keys.Toggle) && m.focusedAction != nil {
+		// Space marks a value the way it selects a service elsewhere: it is the
+		// "pick this one" key, and inside a parameter tree the values are what
+		// there is to pick.
+		if key.Matches(msg, m.keys.Select) && m.markFocusedParamRow() {
+			return m, nil, true
+		}
+		if key.Matches(msg, m.keys.Toggle) && m.focusedAction != nil && !m.paramRowFocused() {
 			command, handled := m.toggleFocusedAction()
 			return m, command, handled
+		}
+		// A parameter row owns none of the lifecycle keys: it is a setting of
+		// an action, not a service to start.
+		if key.Matches(msg, m.keys.Clear) && m.focusedAction != nil && m.actionHasParams(*m.focusedAction) {
+			return m, m.openParamForm(*m.focusedAction), true
+		}
+		if key.Matches(msg, m.keys.Disable) && m.paramRowFocused() && !m.focusedParam.IsValue {
+			m.toggleParamDisabled(m.focusedParam.ID, m.focusedParam.Name)
+			return m, nil, true
 		}
 		if key.Matches(msg, m.keys.Select) || key.Matches(msg, m.keys.ForceStart) || key.Matches(msg, m.keys.Toggle) || key.Matches(msg, m.keys.Restart) {
 			return m, nil, true

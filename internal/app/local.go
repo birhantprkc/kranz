@@ -455,6 +455,11 @@ func (l *Local) RunAction(ctx context.Context, id config.ActionID) (ActionResult
 	return l.manager.RunAction(ctx, id)
 }
 
+// RunActionDefinition executes an immutable, plan-bound action definition.
+func (l *Local) RunActionDefinition(ctx context.Context, id config.ActionID, action config.Action) (ActionResult, error) {
+	return l.manager.RunActionDefinition(ctx, id, action)
+}
+
 func (l *Local) ActionState(id config.ActionID) (ActionResult, bool) {
 	return l.manager.ActionState(id)
 }
@@ -477,6 +482,32 @@ func (l *Local) AcquireInteractiveAction(id config.ActionID) (config.Action, str
 
 func (l *Local) AcquireInteractiveActionContext(ctx context.Context, id config.ActionID) (config.Action, string, error) {
 	return l.manager.AcquireInteractiveActionContext(ctx, id)
+}
+
+func (l *Local) AcquireInteractivePlan(ctx context.Context, request PlanRequest, token string) (OperationPlan, config.Action, string, error) {
+	plan, resolved, err := l.resolvePlan(request)
+	if err != nil {
+		return plan, config.Action{}, "", err
+	}
+	if request.Operation != "action" || resolved == nil || !resolved.definition.InteractiveEnabled() {
+		return plan, config.Action{}, "", fmt.Errorf("%w: %s/%s", ErrInteractiveAction, request.Action.Owner, request.Action.Name)
+	}
+	// Terminal handoff always needs an explicit, plan-bound confirmation even
+	// when the rendered values themselves are safe.
+	if !plan.RequiresConfirmation {
+		plan.RequiresConfirmation = true
+		plan.Fingerprint = operationFingerprint(plan)
+	}
+	if token != "" {
+		if err := l.consumeConfirmation(token, plan); err != nil {
+			return plan, config.Action{}, "", err
+		}
+	} else {
+		plan.ConfirmationToken = l.issueConfirmation(plan, confirmationExecution)
+		return plan, config.Action{}, "", &ConfirmationRequiredError{Plan: plan}
+	}
+	action, lease, err := l.manager.AcquireInteractiveActionDefinitionContext(ctx, request.Action, resolved.definition)
+	return plan, action, lease, err
 }
 
 func (l *Local) CompleteInteractiveAction(id config.ActionID, lease string, execErr error, exitCode, pid int) (ActionResult, error) {

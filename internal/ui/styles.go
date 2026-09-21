@@ -54,6 +54,13 @@ var (
 	PanelTitleStyle       lipgloss.Style
 	FocusedTitleStyle     lipgloss.Style
 	DetailLabelStyle      lipgloss.Style
+	ParamErrorStyle       lipgloss.Style
+	ParamBlockedStyle     lipgloss.Style
+	ParamInputStyle       lipgloss.Style
+	ParamCommandStyle     lipgloss.Style
+	ParamCommandIdleStyle lipgloss.Style
+	ParamDisabledStyle    lipgloss.Style
+	ParamFieldFocusStyle  lipgloss.Style
 	SelectionStyle        lipgloss.Style
 	ContextBarStyle       lipgloss.Style
 	PrimaryButtonStyle    lipgloss.Style
@@ -155,6 +162,30 @@ func applyPalette(theme Theme) {
 		Background(lipgloss.Color(focusedTitleBackground)).
 		Bold(true)
 	DetailLabelStyle = lipgloss.NewStyle().Foreground(ColorDim).Bold(true)
+	// A command that cannot be built is an error, and the value that blocks it
+	// is named in the accent so the eye goes from the red line to the row that
+	// has to change.
+	ParamErrorStyle = lipgloss.NewStyle().Foreground(ColorRed)
+	ParamBlockedStyle = lipgloss.NewStyle().Foreground(ColorRed).Bold(true)
+	// A typed value is dim until it holds something, so an empty field reads as
+	// waiting rather than as a value of its own.
+	ParamInputStyle = lipgloss.NewStyle().Foreground(ColorDim)
+	// The command the values build is the point of the block, so it is set
+	// apart from the settings above and below it without taking a colour that
+	// already means something else here.
+	ParamCommandStyle = lipgloss.NewStyle().Foreground(ColorGrey).Bold(true)
+	// The same colour without the emphasis. A command is always given one of
+	// these explicitly: the prompt in front of the first line ends with a
+	// reset, and a line that inherited its colour instead would come out a
+	// different shade from the lines that follow it.
+	ParamCommandIdleStyle = lipgloss.NewStyle().Foreground(ColorGrey)
+	// A switched-off parameter sits just behind ordinary muted text without
+	// falling all the way to the low-contrast border colour.
+	disabledText := mixHex(theme.Muted, theme.Surface, 0.18)
+	ParamDisabledStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(disabledText))
+	// The field under the cursor is filled rather than pointed at, so a form
+	// reads as a form and the eye lands on the whole row.
+	ParamFieldFocusStyle = lipgloss.NewStyle().Foreground(ColorSelectText).Background(ColorSelection)
 	SelectionStyle = lipgloss.NewStyle().Foreground(ColorSelectText).Background(ColorSelection).Bold(true)
 	ContextBarStyle = lipgloss.NewStyle().Foreground(ColorDim)
 	PrimaryButtonStyle = lipgloss.NewStyle().Foreground(ColorAccentText).Bold(true).Padding(0, 1)

@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,23 @@ func TestInteractiveCommandCarriesExecutionContext(t *testing.T) {
 	// command the user is looking at.
 	if command.SysProcAttr != nil {
 		t.Fatalf("interactive command must not create its own process group: %#v", command.SysProcAttr)
+	}
+}
+
+func TestInteractiveCommandExecutesRenderedArgvWithoutAShell(t *testing.T) {
+	command := interactiveCommand(config.Action{
+		Argv: config.ArgvList{"/bin/echo", "value with spaces", "$NOT_SHELL"},
+		Env:  map[string]string{"KRANZ_EXAMPLE": "yes"},
+	})
+	if command.Path != "/bin/echo" {
+		t.Fatalf("command path = %q", command.Path)
+	}
+	want := []string{"/bin/echo", "value with spaces", "$NOT_SHELL"}
+	if !slices.Equal(command.Args, want) {
+		t.Fatalf("command argv = %#v, want %#v", command.Args, want)
+	}
+	if !containsEnv(command, "KRANZ_EXAMPLE=yes") {
+		t.Fatalf("command env did not carry the rendered variables: %v", command.Env)
 	}
 }
 

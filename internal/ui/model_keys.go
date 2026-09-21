@@ -26,7 +26,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// Search is a text-entry mode and must preserve the user's actual runes.
 	// Everywhere else, shortcuts follow their documented physical Latin keys.
-	if m.mode != ModeSearch {
+	if m.mode != ModeSearch && m.mode != ModeParamEdit {
 		msg = normalizeShortcutKey(msg)
 	}
 
@@ -67,6 +67,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleRuntimeSwitcherKeys(msg)
 	case ModeRuntimeLost:
 		return m.handleRuntimeLostKeys(msg)
+	case ModeParamEdit:
+		return m.handleParamEditKeys(msg)
+	case ModeParamForm:
+		return m.handleParamFormKeys(msg)
 	default:
 		if msg.String() == "esc" || msg.String() == "q" {
 			m.mode = ModeNormal
@@ -156,6 +160,17 @@ func (m *Model) handleNavigationKey(msg tea.KeyMsg) bool {
 	case key.Matches(msg, m.keys.Left), key.Matches(msg, m.keys.Right):
 		if m.panelFocus != panelServices {
 			return false
+		}
+		// Standing on a setting, left and right belong to its values, and a
+		// setting with nothing to step through simply stays put: leaving for
+		// the tag list would strand the cursor on a row it no longer drives.
+		if m.paramRowFocused() {
+			step := 1
+			if key.Matches(msg, m.keys.Left) {
+				step = -1
+			}
+			m.stepFocusedParamValue(step, msg.String() == "shift+left" || msg.String() == "shift+right")
+			return true
 		}
 		m.toggleListMode()
 		return true

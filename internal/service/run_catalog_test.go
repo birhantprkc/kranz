@@ -291,3 +291,34 @@ func TestManagerRefusesToDeleteLiveRun(t *testing.T) {
 		t.Fatalf("live run changed after refusal: %#v", runs)
 	}
 }
+
+func TestRunHistoryKeepsTheInvocationItRecorded(t *testing.T) {
+	catalog := NewRunCatalog(10)
+	target := ActionRunTarget(config.ActionID{OwnerKind: config.ActionOwnerGroup, Owner: "infra", Name: "seed"})
+	values := map[string]any{"env": "prod", "targets": []string{"phone", "watch"}}
+	catalog.Begin(RunSummary{Target: target, Run: 1, Status: "running", StartedAt: time.Unix(1, 0), Params: values, CommandPreview: "./seed.sh --env prod"})
+
+	// Mutating the caller's map afterwards must not rewrite history.
+	values["env"] = "dev"
+
+	runs := catalog.List(target)
+	if len(runs) != 1 {
+		t.Fatalf("runs = %#v", runs)
+	}
+	if runs[0].Params["env"] != "prod" || runs[0].CommandPreview != "./seed.sh --env prod" {
+		t.Fatalf("recorded invocation = %#v", runs[0])
+	}
+
+	// A reader holds its own copy, so editing one listing cannot reach the
+	// catalog or the next reader.
+	runs[0].Params["env"] = "staging"
+	if again := catalog.List(target); again[0].Params["env"] != "prod" {
+		t.Fatalf("a reader rewrote the catalog: %#v", again[0].Params)
+	}
+
+	plain := ActionRunTarget(config.ActionID{OwnerKind: config.ActionOwnerGroup, Owner: "infra", Name: "plain"})
+	catalog.Begin(RunSummary{Target: plain, Run: 1, Status: "running", StartedAt: time.Unix(1, 0)})
+	if got := catalog.List(plain)[0].Params; got != nil {
+		t.Fatalf("an action without parameters recorded %#v", got)
+	}
+}

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -392,6 +393,51 @@ func TestSupervisorClientInteractiveActionLeaseRoundTrips(t *testing.T) {
 	}
 	if result.Status != app.ActionSucceeded {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestSupervisorClientParameterizedInteractivePlanRoundTrips(t *testing.T) {
+	cfg := &config.Config{
+		Project: "RPC Interactive Params",
+		ActionGroups: map[string]config.ActionGroup{
+			"tools": {Actions: map[string]config.Action{
+				"console": {
+					Interactive: boolPointer(true), Run: config.ArgvList{"/bin/echo"},
+					Params: map[string]config.ActionParam{
+						"mode": {Type: "select", Options: config.ActionParamOptions{{Value: "safe"}, {Value: "write"}}, Default: "safe", Arg: "--mode"},
+					},
+					ParamOrder: []string{"mode"},
+				},
+			}}},
+		ActionGroupOrder: []string{"tools"},
+	}
+	client, cleanup := startTestSupervisor(t, cfg, nil)
+	defer cleanup()
+	id := config.ActionID{OwnerKind: config.ActionOwnerGroup, Owner: "tools", Name: "console"}
+	request := app.PlanRequest{Operation: "action", Action: id, Params: map[string]json.RawMessage{"mode": json.RawMessage(`"write"`)}}
+
+	_, _, _, err := client.AcquireInteractivePlan(context.Background(), request, "")
+	var required *app.ConfirmationRequiredError
+	if !errors.As(err, &required) {
+		t.Fatalf("first handoff = %v, want confirmation", err)
+	}
+	plan, action, lease, err := client.AcquireInteractivePlan(context.Background(), request, required.Plan.ConfirmationToken)
+	if err != nil {
+		t.Fatalf("confirmed handoff: %v", err)
+	}
+	if lease == "" || plan.CommandPreview != "/bin/echo --mode write" || len(action.Argv) != 3 {
+		t.Fatalf("wire handoff = plan %#v, action %#v, lease %q", plan, action, lease)
+	}
+	command := app.BuildInteractiveCommand(action)
+	if err := command.Run(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.CompleteInteractiveAction(id, lease, nil, command.ProcessState.ExitCode(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Params["mode"] != "write" || result.CommandPreview != plan.CommandPreview {
+		t.Fatalf("wire result = %#v", result)
 	}
 }
 

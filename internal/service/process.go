@@ -109,6 +109,34 @@ func (pm *ProcessManager) Start(ctx context.Context, command, dir string, env ma
 	}
 	cmd := exec.CommandContext(ctx, shell, "-c", command)
 	cmd.Dir = dir
+	return pm.launch(cmd, env)
+}
+
+// StartArgv launches an argument vector directly, without a shell. The first
+// element is the executable and every element stays one process argument, so a
+// parameter value can never become shell syntax.
+func (pm *ProcessManager) StartArgv(ctx context.Context, argv []string, dir string, env map[string]string) (int, error) {
+	if len(argv) == 0 {
+		return 0, errors.New("argv action requires at least an executable")
+	}
+	pm.stopMu.Lock()
+	defer pm.stopMu.Unlock()
+
+	pm.mu.RLock()
+	alreadyStarted := pm.cmd != nil
+	pm.mu.RUnlock()
+	if alreadyStarted {
+		return 0, errors.New("process manager cannot be started more than once")
+	}
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = dir
+	return pm.launch(cmd, env)
+}
+
+// launch applies the shared process-group, environment, capture, and reaping
+// setup to an already-built command.
+func (pm *ProcessManager) launch(cmd *exec.Cmd, env map[string]string) (int, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Explicit service variables override the inherited host environment.

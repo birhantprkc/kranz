@@ -40,8 +40,8 @@ type Manager struct {
 	logsMu               sync.Mutex
 	detachedLogs         map[string]*detachedLogFollower
 	prereqMu             sync.Mutex
-	prereqSatisfied      map[config.ActionID]bool
-	prereqRuns           map[config.ActionID]*prereqRun
+	prereqSatisfied      map[prereqKey]bool
+	prereqRuns           map[prereqKey]*prereqRun
 	journal              *Journal
 	runs                 *RunCatalog
 }
@@ -584,8 +584,8 @@ func NewManager(cfg *config.Config) *Manager {
 		listenerScanInterval: 2 * time.Second,
 		statusMonitors:       make(map[string]*statusMonitor),
 		detachedLogs:         make(map[string]*detachedLogFollower),
-		prereqSatisfied:      make(map[config.ActionID]bool),
-		prereqRuns:           make(map[config.ActionID]*prereqRun),
+		prereqSatisfied:      make(map[prereqKey]bool),
+		prereqRuns:           make(map[prereqKey]*prereqRun),
 		journal:              NewJournal(defaultJournalSize),
 		runs:                 NewRunCatalog(defaultRunCatalogSize),
 	}

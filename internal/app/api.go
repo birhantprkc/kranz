@@ -135,6 +135,9 @@ type API interface {
 	// neither a process handle nor a closure over one survives the wire.
 	AcquireInteractiveAction(id config.ActionID) (config.Action, string, error)
 	AcquireInteractiveActionContext(ctx context.Context, id config.ActionID) (config.Action, string, error)
+	// AcquireInteractivePlan validates and confirms a parameterized invocation,
+	// then reserves the exact rendered definition for terminal handoff.
+	AcquireInteractivePlan(ctx context.Context, request PlanRequest, confirmationToken string) (OperationPlan, config.Action, string, error)
 	// CompleteInteractiveAction finishes an AcquireInteractiveAction lease
 	// with the outcome the caller observed running the command: the error
 	// tea.ExecProcess reported, if any, plus the exit code and PID read

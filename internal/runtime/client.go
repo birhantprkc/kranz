@@ -514,6 +514,11 @@ func (c *Client) AcquireInteractiveActionContext(ctx context.Context, id config.
 	return resp.Action, resp.Lease, err
 }
 
+func (c *Client) AcquireInteractivePlan(ctx context.Context, request app.PlanRequest, token string) (app.OperationPlan, config.Action, string, error) {
+	resp, err := call[executePlanRequest, acquireInteractivePlanResponse](c, ctx, methodAcquireInteractivePlan, executePlanRequest{Request: request, ConfirmationToken: token})
+	return resp.Plan, resp.Action, resp.Lease, err
+}
+
 func (c *Client) CompleteInteractiveAction(id config.ActionID, lease string, execErr error, exitCode, pid int) (app.ActionResult, error) {
 	req := completeInteractiveActionRequest{ID: id, Lease: lease, ExitCode: exitCode, PID: pid}
 	if execErr != nil {

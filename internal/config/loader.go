@@ -99,6 +99,12 @@ func loadFile(path, basePath string) (*Config, error) {
 // can see.
 func envExpander(dotenv map[string]string) func(string) string {
 	return func(name string) string {
+		// "$$" is the escape: expansion runs over the whole file before it is
+		// parsed, so without one a shell variable written in a command would
+		// be silently emptied and the command would keep running, wrong.
+		if name == "$" {
+			return "$"
+		}
 		if value, ok := os.LookupEnv(name); ok {
 			return value
 		}
@@ -423,8 +429,15 @@ func mergeActions(base map[string]Action, baseOrder []string, override map[strin
 }
 
 func mergeAction(base, override Action) Action {
-	if override.Command != "" {
+	// The command group is atomic: an override that names any of command, run,
+	// argv, or params replaces the whole execution declaration, so a render can
+	// never pair an argument vector from one layer with a schema from another.
+	if override.Command != "" || len(override.Run) > 0 || len(override.Argv) > 0 || len(override.Params) > 0 {
 		base.Command = override.Command
+		base.Run = append(ArgvList(nil), override.Run...)
+		base.Argv = append(ArgvList(nil), override.Argv...)
+		base.Params = cloneActionParams(override.Params)
+		base.ParamOrder = append([]string(nil), override.ParamOrder...)
 	}
 	if override.Description != "" {
 		base.Description = override.Description
@@ -451,6 +464,17 @@ func mergeAction(base, override Action) Action {
 		base.Interactive = &value
 	}
 	return base
+}
+
+func cloneActionParams(params map[string]ActionParam) map[string]ActionParam {
+	if params == nil {
+		return nil
+	}
+	cloned := make(map[string]ActionParam, len(params))
+	for name, param := range params {
+		cloned[name] = param
+	}
+	return cloned
 }
 
 func mergeStringMap(base, override map[string]string) map[string]string {
@@ -482,11 +506,19 @@ func recordDeclarationOrder(cfg *Config, data []byte) {
 	cfg.ServiceOrder = mappingKeyOrder(data, "services")
 	for name, service := range cfg.Services {
 		service.ActionOrder = mappingKeyOrder(data, "services", name, "actions")
+		for actionName, action := range service.Actions {
+			action.ParamOrder = mappingKeyOrder(data, "services", name, "actions", actionName, "params")
+			service.Actions[actionName] = action
+		}
 		cfg.Services[name] = service
 	}
 	cfg.ActionGroupOrder = mappingKeyOrder(data, "action_groups")
 	for name, group := range cfg.ActionGroups {
 		group.ActionOrder = mappingKeyOrder(data, "action_groups", name, "actions")
+		for actionName, action := range group.Actions {
+			action.ParamOrder = mappingKeyOrder(data, "action_groups", name, "actions", actionName, "params")
+			group.Actions[actionName] = action
+		}
 		cfg.ActionGroups[name] = group
 	}
 }
@@ -698,6 +730,9 @@ func applyDefaults(cfg *Config) error {
 			svc.Command = svc.Lifecycle.Start.Command
 		}
 		for actionName, action := range svc.Actions {
+			if err := checkActionShell(fmt.Sprintf("service %q", name), actionName, action); err != nil {
+				return err
+			}
 			normalized, err := normalizeAction(cfg, svc.Dir, svc.Shell, svc.Env, action)
 			if err != nil {
 				return fmt.Errorf("service %q action %q env files: %w", name, actionName, err)
@@ -728,6 +763,9 @@ func applyDefaults(cfg *Config) error {
 			group.Env[key] = os.ExpandEnv(value)
 		}
 		for actionName, action := range group.Actions {
+			if err := checkActionShell(fmt.Sprintf("action group %q", groupName), actionName, action); err != nil {
+				return err
+			}
 			normalized, err := normalizeAction(cfg, group.Dir, group.Shell, group.Env, action)
 			if err != nil {
 				return fmt.Errorf("action group %q action %q env files: %w", groupName, actionName, err)
@@ -737,6 +775,19 @@ func applyDefaults(cfg *Config) error {
 		cfg.ActionGroups[groupName] = group
 	}
 	return nil
+}
+
+// checkActionShell rejects a shell declared on an action that runs an argument
+// vector. It runs before inheritance fills the field, so an owner's shell stays
+// silently irrelevant while an explicit one is reported instead of ignored.
+func checkActionShell(owner, name string, action Action) error {
+	if strings.TrimSpace(action.Shell) == "" {
+		return nil
+	}
+	if len(action.Run) == 0 && len(action.Argv) == 0 && len(action.Params) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s action %q: field 'shell' does not apply to an action that declares 'run', 'argv', or 'params': such an action runs without a shell", owner, name)
 }
 
 func normalizeAction(cfg *Config, ownerDir, ownerShell string, ownerEnv map[string]string, action Action) (Action, error) {

@@ -22,6 +22,7 @@ func (m *Model) serviceListRows() []actionListRow {
 		if m.expandedActionOwner[actionOwnerKey(config.ActionOwnerService, svc.Name)] {
 			for _, id := range m.actionIDsFor(config.ActionOwnerService, svc.Name) {
 				rows = append(rows, actionListRow{Kind: actionRowAction, Service: svc, Action: id})
+				rows = append(rows, m.actionParamRows(id)...)
 			}
 		}
 	}
@@ -30,6 +31,7 @@ func (m *Model) serviceListRows() []actionListRow {
 		if m.expandedActionOwner[actionOwnerKey(config.ActionOwnerGroup, group)] {
 			for _, id := range m.actionIDsFor(config.ActionOwnerGroup, group) {
 				rows = append(rows, actionListRow{Kind: actionRowAction, Group: group, Action: id})
+				rows = append(rows, m.actionParamRows(id)...)
 			}
 		}
 	}
@@ -49,7 +51,30 @@ func (m *Model) actionIDsFor(kind config.ActionOwnerKind, owner string) []config
 func (m *Model) focusedServiceListRow() int {
 	rows := m.serviceListRows()
 	for index, row := range rows {
-		if m.focusedAction != nil && row.Kind == actionRowAction && row.Action == *m.focusedAction {
+		// A parameter focus names exactly one row. Matching a value focus
+		// loosely would return the parameter's own row, which sits above its
+		// values, and the cursor could never move past the first of them.
+		if focus := m.focusedParam; focus != nil {
+			if row.Action != focus.ID {
+				continue
+			}
+			switch {
+			case focus.Preview:
+				if row.Kind == actionRowPreview {
+					return index
+				}
+			case focus.IsValue:
+				if row.Kind == actionRowParamValue && row.Param == focus.Name && row.Value == focus.Value {
+					return index
+				}
+			default:
+				if row.Kind == actionRowParam && row.Param == focus.Name {
+					return index
+				}
+			}
+			continue
+		}
+		if m.focusedParam == nil && m.focusedAction != nil && row.Kind == actionRowAction && row.Action == *m.focusedAction {
 			return index
 		}
 		if m.focusedAction == nil && m.focusedActionGroup != "" && row.Kind == actionRowGroup && row.Group == m.focusedActionGroup {
@@ -76,6 +101,7 @@ func (m *Model) focusServiceListRow(index int) {
 	row := rows[index]
 	m.focusedAction = nil
 	m.focusedActionGroup = ""
+	m.focusedParam = nil
 	switch row.Kind {
 	case actionRowService:
 		m.focusServiceByName(row.Service.Name)
@@ -90,6 +116,30 @@ func (m *Model) focusServiceListRow(index int) {
 		id := row.Action
 		m.focusedAction = &id
 		m.resetActionView()
+	case actionRowParam:
+		if row.Service != nil {
+			m.focusServiceByName(row.Service.Name)
+		} else if row.Group != "" {
+			m.focusedActionGroup = row.Group
+		}
+		id := row.Action
+		m.focusedAction = &id
+		m.focusedParam = &paramRowFocus{ID: id, Name: row.Param}
+		m.resetActionView()
+	case actionRowParamValue:
+		if row.Service != nil {
+			m.focusServiceByName(row.Service.Name)
+		} else if row.Group != "" {
+			m.focusedActionGroup = row.Group
+		}
+		id := row.Action
+		m.focusedAction = &id
+		m.focusedParam = &paramRowFocus{ID: id, Name: row.Param, Value: row.Value, IsValue: true}
+		m.resetActionView()
+	case actionRowPreview:
+		id := row.Action
+		m.focusedAction = &id
+		m.focusedParam = &paramRowFocus{ID: id, Preview: true}
 	}
 }
 
@@ -122,6 +172,15 @@ func (m *Model) moveServiceListCursor(direction int) {
 		current = 0
 	}
 	next := min(len(rows)-1, max(0, current+direction))
+	// A command continued over several rows is one stop, not several: its
+	// continuation rows carry no focus of their own, and landing on one would
+	// leave the cursor unable to move on.
+	for next > 0 && next < len(rows)-1 && rows[next].Continued {
+		next += direction
+	}
+	for next > 0 && rows[next].Continued {
+		next--
+	}
 	if next != current {
 		m.focusServiceListRow(next)
 	}
@@ -152,7 +211,16 @@ func (m *Model) openFocusedListItem() (tea.Cmd, bool) {
 	if m.listMode != listServices {
 		return nil, false
 	}
+	if m.focusedParam != nil {
+		return m.toggleFocusedParamRow()
+	}
 	if m.focusedAction != nil {
+		id := *m.focusedAction
+		if m.actionHasParams(id) {
+			m.expandedActionParams[id] = !m.expandedActionParams[id]
+			m.focusedParam = nil
+			return nil, true
+		}
 		return nil, true
 	}
 	return nil, m.toggleFocusedActionOwner()
@@ -171,6 +239,9 @@ func (m *Model) toggleFocusedAction() (tea.Cmd, bool) {
 	if state, ok := m.app.ActionState(id); ok && state.Status == app.ActionRunning {
 		m.beginActionConfirmation(id, true)
 		return nil, true
+	}
+	if m.actionHasParams(id) {
+		return m.runParameterizedAction(id), true
 	}
 	// An interactive action always confirms, whether or not it asked to. Taking
 	// over the terminal removes Kranz from the screen, and that must never
@@ -192,6 +263,10 @@ func (m *Model) runInteractiveAction(id config.ActionID) tea.Cmd {
 		m.addNotification("action", id.Name+": "+err.Error(), config.LogError)
 		return nil
 	}
+	return m.runAcquiredInteractiveAction(id, action, lease)
+}
+
+func (m *Model) runAcquiredInteractiveAction(id config.ActionID, action config.Action, lease string) tea.Cmd {
 	application, sessionGen := m.app, m.sessionGeneration
 	command := app.BuildInteractiveCommand(action)
 	m.addNotification("action", "Handing the terminal to "+id.Name, config.LogInfo)
@@ -236,6 +311,16 @@ func (m *Model) runAction(id config.ActionID, action config.Action) tea.Cmd {
 }
 
 func (m *Model) confirmPendingAction() tea.Cmd {
+	if m.pendingParamRequest != nil {
+		request := *m.pendingParamRequest
+		token := m.pendingParamToken
+		m.pendingParamRequest = nil
+		m.pendingParamToken = ""
+		m.pendingAction = nil
+		m.pendingActionStop = false
+		m.mode = ModeNormal
+		return m.executeParamPlan(request, token)
+	}
 	id := m.pendingAction
 	stop := m.pendingActionStop
 	m.pendingAction = nil
@@ -263,6 +348,8 @@ func (m *Model) confirmPendingAction() tea.Cmd {
 func (m *Model) cancelPendingAction() {
 	m.pendingAction = nil
 	m.pendingActionStop = false
+	m.pendingParamRequest = nil
+	m.pendingParamToken = ""
 	m.mode = ModeNormal
 }
 

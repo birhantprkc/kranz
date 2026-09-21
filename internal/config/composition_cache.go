@@ -121,10 +121,18 @@ func cloneAutonomousConfig(source *Config) (*Config, error) {
 	clone.explicitEnv = cloneStringMap(source.explicitEnv)
 	for name, service := range clone.Services {
 		service.ActionOrder = append([]string(nil), source.Services[name].ActionOrder...)
+		for actionName, action := range service.Actions {
+			action.ParamOrder = append([]string(nil), source.Services[name].Actions[actionName].ParamOrder...)
+			service.Actions[actionName] = action
+		}
 		clone.Services[name] = service
 	}
 	for name, group := range clone.ActionGroups {
 		group.ActionOrder = append([]string(nil), source.ActionGroups[name].ActionOrder...)
+		for actionName, action := range group.Actions {
+			action.ParamOrder = append([]string(nil), source.ActionGroups[name].Actions[actionName].ParamOrder...)
+			group.Actions[actionName] = action
+		}
 		clone.ActionGroups[name] = group
 	}
 	return &clone, nil

@@ -14,6 +14,14 @@ import (
 // The first column: the service list, the tag list with its inline expansion,
 // and the state indicators shared by both.
 
+// commandPromptMarker prefixes a line that is a command rather than a setting.
+// The run output and the detail panel spell it the same way.
+const commandPromptMarker = "$"
+
+// parameterMark tells a collapsed action that its command is assembled rather
+// than fixed.
+const parameterMark = "◆"
+
 func (m *Model) serviceCounts() (running, pending, stopped int) {
 	for _, svc := range m.allServices {
 		switch svc.State.Status {
@@ -171,7 +179,56 @@ func (m *Model) renderServiceListRow(index int, row actionListRow, width int) st
 		if state.Duration > 0 && state.Status != app.ActionRunning {
 			status += ContextBarStyle.Render(" · " + state.Duration.Round(time.Millisecond).String())
 		}
+		// An action whose command can be configured carries the settings mark.
+		// A triangle would read as "expand a list", which is not what opening
+		// it offers.
+		if m.actionHasParams(row.Action) && !m.expandedActionParams[row.Action] {
+			status += ContextBarStyle.Render(" " + parameterMark)
+		}
 		return renderListLine("      "+status, width, focused)
+	case actionRowParam:
+		label := m.paramRowLabel(row.Action, row.Param)
+		if m.paramEditing(row.Action, row.Param) {
+			editor := SearchInputStyle.Render(preserveStyleAfterReset(m.paramInput.View(), SearchInputStyle))
+			return renderListLine("          "+label+" "+editor, width, focused)
+		}
+		// The value that blocks the command is red, and its name carries the
+		// accent. The reason itself is said once, on the command line.
+		value := m.paramRowText(row.Action, row.Param)
+		if m.paramRowBlocked(row.Action, row.Param) {
+			value = ParamErrorStyle.Render(ansi.Strip(value))
+		}
+		line := "          " + label + " " + value
+		if focused && m.paramDisabled(row.Action, row.Param) {
+			line = ansi.Strip(line)
+		}
+		return renderListLine(line, width, focused)
+	case actionRowParamValue:
+		// The indent alone nests a value. A leading arrow here would compete
+		// with the one that marks a wrapped line in the details panel.
+		return renderListLine("            "+m.paramValueMarker(row.Action, row.Param, row.Value)+" "+row.Value, width, focused)
+	case actionRowPreview:
+		// The prompt marks the line as the command itself rather than another
+		// setting, and matches the one the run output carries. A command that
+		// cannot be built shows its template in the error colour; what is wrong
+		// with it is said once, in the details panel.
+		// Every line of a command carries its style explicitly, so the one
+		// that follows the prompt and the ones that follow a plain indent come
+		// out the same colour.
+		command, marker := ParamCommandIdleStyle.Render(row.Preview), ContextBarStyle.Render(commandPromptMarker)
+		switch {
+		case row.Blocked:
+			command, marker = ParamErrorStyle.Render(row.Preview), ParamErrorStyle.Render(commandPromptMarker)
+		case m.focusedParam != nil && m.focusedParam.ID == row.Action:
+			command = ParamCommandStyle.Render(row.Preview)
+		}
+		// Only the first line of a continued command wears the prompt; the
+		// rest line up under it, as they would in a shell.
+		prefix := "        " + marker + " "
+		if row.Continued {
+			prefix = "          "
+		}
+		return renderListLine(prefix+command, width, focused)
 	default:
 		return ""
 	}

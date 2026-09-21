@@ -64,6 +64,26 @@ func TestEveryThemeCanBeApplied(t *testing.T) {
 	}
 }
 
+func TestDisabledTextRemainsVisibleWithANSI16Colors(t *testing.T) {
+	restoreDefaultTheme(t)
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	for _, name := range ThemeNames() {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ApplyTheme(name, ""); err != nil {
+				t.Fatal(err)
+			}
+			disabled := ParamDisabledStyle.Render("disabled")
+			canvas := lipgloss.NewStyle().Foreground(ColorDarkBg).Render("disabled")
+			if disabled == canvas {
+				t.Fatalf("disabled text collapsed into the canvas in ANSI mode: %q", disabled)
+			}
+		})
+	}
+}
+
 func TestHighContrastThemeUsesMaximumCanvasContrast(t *testing.T) {
 	restoreDefaultTheme(t)
 	theme, err := ApplyTheme("high-contrast", "")

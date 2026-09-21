@@ -12,12 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kranz-org/kranz/internal/actionparams"
 	"github.com/kranz-org/kranz/internal/config"
 	"github.com/kranz-org/kranz/internal/service"
 )
 
 const (
-	OperationSchemaVersion          = 1
+	// OperationSchemaVersion 2 adds parameterized action fields to the plan.
+	OperationSchemaVersion          = 2
 	maxConfirmationTokensPerPurpose = 256
 )
 
@@ -26,6 +28,25 @@ type PlanRequest struct {
 	Selectors           []string        `json:"selectors,omitempty"`
 	IncludeDependencies bool            `json:"include_dependencies,omitempty"`
 	Action              config.ActionID `json:"action,omitempty"`
+	// Params is nil when the caller sent no parameter object at all, which is
+	// distinct from an empty object and is how a pre-parameters client is
+	// recognized. It is deliberately not omitempty.
+	Params map[string]json.RawMessage `json:"params"`
+}
+
+// InvalidArgumentsError reports invalid action parameters with per-field
+// reasons. Delivery surfaces translate it to the invalid_arguments code.
+type InvalidArgumentsError struct {
+	Action  string
+	Message string
+	Fields  map[string]string
+}
+
+func (e *InvalidArgumentsError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return "action parameters are invalid"
 }
 
 type OperationWave struct {
@@ -46,6 +67,10 @@ type OperationPlan struct {
 	RequiresConfirmation bool            `json:"requires_confirmation"`
 	Fingerprint          string          `json:"fingerprint"`
 	ConfirmationToken    string          `json:"confirmation_token,omitempty"`
+	// Params holds the normalized parameter values and CommandPreview the
+	// display-only preview of the exact invocation the plan will execute.
+	Params         map[string]any `json:"params,omitempty"`
+	CommandPreview string         `json:"command_preview,omitempty"`
 }
 
 type OperationResult struct {
@@ -140,7 +165,7 @@ func ResolveServiceSelectors(cfg *config.Config, selectors []string) ([]string, 
 }
 
 func (l *Local) Plan(request PlanRequest) (OperationPlan, error) {
-	plan, err := l.resolvePlan(request)
+	plan, _, err := l.resolvePlan(request)
 	if err != nil {
 		return plan, err
 	}
@@ -150,8 +175,12 @@ func (l *Local) Plan(request PlanRequest) (OperationPlan, error) {
 	return plan, nil
 }
 
-func (l *Local) resolvePlan(request PlanRequest) (OperationPlan, error) {
+// resolvePlan renders the plan and, for an action, the immutable definition
+// that plan will execute. The caller carries that definition through
+// confirmation so nothing re-resolves the action by ID afterwards.
+func (l *Local) resolvePlan(request PlanRequest) (OperationPlan, *resolvedAction, error) {
 	project := l.Project()
+	var resolved *resolvedAction
 	plan := OperationPlan{SchemaVersion: OperationSchemaVersion, SessionID: project.SessionID, Generation: project.Generation, Operation: request.Operation, Selectors: append([]string(nil), request.Selectors...), IncludeDependencies: request.IncludeDependencies, Targets: []string{}}
 	switch request.Operation {
 	case "start", "stop", "restart":
@@ -165,16 +194,16 @@ func (l *Local) resolvePlan(request PlanRequest) (OperationPlan, error) {
 		}
 		names, err := ResolveServiceSelectors(selectorConfig, selectors)
 		if err != nil {
-			return plan, err
+			return plan, nil, err
 		}
 		if request.Operation == "start" && request.IncludeDependencies {
 			closure, err := l.manager.StartDependencyClosure(names)
 			if err != nil {
-				return plan, err
+				return plan, nil, err
 			}
 			order, err := service.TopologicalOrder(l.Config())
 			if err != nil {
-				return plan, err
+				return plan, nil, err
 			}
 			for _, name := range order {
 				if closure[name] {
@@ -210,20 +239,27 @@ func (l *Local) resolvePlan(request PlanRequest) (OperationPlan, error) {
 	case "action":
 		action, ok := l.Config().ResolveAction(request.Action)
 		if !ok {
-			return plan, fmt.Errorf("%w: %s/%s", ErrActionNotFound, request.Action.Owner, request.Action.Name)
+			return plan, nil, fmt.Errorf("%w: %s/%s", ErrActionNotFound, request.Action.Owner, request.Action.Name)
 		}
 		plan.Action = request.Action.Owner + "/" + request.Action.Name
 		plan.Targets = []string{plan.Action}
-		plan.RequiresConfirmation = action.ConfirmationRequired()
+		execution, err := l.resolveActionDefinition(request.Action, action, request.Params)
+		if err != nil {
+			return plan, nil, err
+		}
+		resolved = &execution
+		plan.Params = execution.values
+		plan.CommandPreview = execution.preview
+		plan.RequiresConfirmation = execution.confirm
 	default:
-		return plan, &ConfirmationError{Code: "invalid_operation", Message: fmt.Sprintf("unsupported operation %q", request.Operation)}
+		return plan, nil, &ConfirmationError{Code: "invalid_operation", Message: fmt.Sprintf("unsupported operation %q", request.Operation)}
 	}
 	plan.Fingerprint = operationFingerprint(plan)
-	return plan, nil
+	return plan, resolved, nil
 }
 
 func (l *Local) ExecutePlan(ctx context.Context, request PlanRequest, token string) (OperationResult, error) {
-	plan, err := l.resolvePlan(request)
+	plan, resolved, err := l.resolvePlan(request)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -252,14 +288,78 @@ func (l *Local) ExecutePlan(ctx context.Context, request PlanRequest, token stri
 	case "restart":
 		err = l.RestartServicesContext(ctx, plan.Targets)
 	case "action":
+		if resolved == nil {
+			err = fmt.Errorf("%w: %s/%s", ErrActionNotFound, request.Action.Owner, request.Action.Name)
+			break
+		}
 		var actionResult ActionResult
 		// A delivery request is only waiting for an action result; it does not
 		// own the action lifetime. Cancellation is the separate CancelAction
 		// application operation, so an MCP/IPC disconnect cannot kill a job.
-		actionResult, err = l.RunAction(context.WithoutCancel(ctx), request.Action)
+		// The immutable resolved definition is executed directly, so a reload
+		// after confirmation can never substitute a different action.
+		actionResult, err = l.RunActionDefinition(context.WithoutCancel(ctx), request.Action, resolved.definition)
 		result.ActionResult = &actionResult
 	}
 	return result, err
+}
+
+// resolvedAction is one plan-bound rendering of an action definition.
+type resolvedAction struct {
+	definition config.Action
+	values     map[string]any
+	preview    string
+	confirm    bool
+}
+
+// resolveActionDefinition validates raw parameter values and renders the
+// immutable definition the plan will execute.
+func (l *Local) resolveActionDefinition(id config.ActionID, action config.Action, params map[string]json.RawMessage) (resolvedAction, error) {
+	compiled, err := config.CompileAction(actionKey(id), action)
+	if err != nil {
+		return resolvedAction{}, &InvalidArgumentsError{Action: actionKey(id), Message: err.Error()}
+	}
+	if compiled == nil {
+		if len(params) > 0 {
+			return resolvedAction{}, &InvalidArgumentsError{Action: actionKey(id), Message: fmt.Sprintf("action %s does not accept parameters", actionKey(id))}
+		}
+		return resolvedAction{definition: action, confirm: action.ConfirmationRequired()}, nil
+	}
+	if params == nil {
+		return resolvedAction{}, &InvalidArgumentsError{Action: actionKey(id), Message: fmt.Sprintf("action %s takes parameters and this client did not send any: upgrade the client, or pass an explicit parameter object", actionKey(id))}
+	}
+	raw, err := actionparams.DecodeJSON(compiled, params)
+	if err != nil {
+		return resolvedAction{}, actionParamsError(actionKey(id), err)
+	}
+	invocation, err := actionparams.Normalize(compiled, raw)
+	if err != nil {
+		return resolvedAction{}, actionParamsError(actionKey(id), err)
+	}
+	rendered, err := actionparams.Render(compiled, invocation)
+	if err != nil {
+		return resolvedAction{}, actionParamsError(actionKey(id), err)
+	}
+	values := actionparams.NativeValues(invocation)
+	return resolvedAction{
+		definition: action.RenderedAction(rendered, values),
+		values:     values,
+		preview:    rendered.Preview,
+		confirm:    rendered.Confirm,
+	}, nil
+}
+
+func actionParamsError(action string, err error) error {
+	var paramErr *actionparams.Error
+	if errors.As(err, &paramErr) {
+		return &InvalidArgumentsError{Action: action, Message: paramErr.Message, Fields: paramErr.FieldMap()}
+	}
+	return err
+}
+
+// actionKey names an action for parameter diagnostics and invocation keys.
+func actionKey(id config.ActionID) string {
+	return string(id.OwnerKind) + "/" + id.Owner + "/" + id.Name
 }
 
 func operationFingerprint(plan OperationPlan) string {

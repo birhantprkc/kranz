@@ -166,11 +166,16 @@ func PrimaryServiceAction(svc *ServiceSnapshot) string {
 // including setting no process group, so Ctrl+C reaches the command the user
 // is looking at.
 func BuildInteractiveCommand(action config.Action) *exec.Cmd {
-	shell := action.Shell
-	if shell == "" {
-		shell = "sh"
+	var command *exec.Cmd
+	if len(action.Argv) > 0 {
+		command = exec.Command(action.Argv[0], action.Argv[1:]...)
+	} else {
+		shell := action.Shell
+		if shell == "" {
+			shell = "sh"
+		}
+		command = exec.Command(shell, "-c", action.Command)
 	}
-	command := exec.Command(shell, "-c", action.Command)
 	command.Dir = action.Dir
 	command.Env = os.Environ()
 	for name, value := range action.Env {

@@ -318,6 +318,9 @@ type Prerequisite struct {
 	Group  string          `yaml:"group,omitempty"`
 	Action string          `yaml:"action"`
 	Run    PrerequisiteRun `yaml:"run,omitempty"`
+	// Params supplies static parameter values for a parameterized action. They
+	// are validated when the configuration loads, not when a service starts.
+	Params map[string]any `yaml:"params,omitempty"`
 }
 
 // RunPolicy resolves the optional run frequency.
@@ -359,15 +362,24 @@ func (p Prerequisite) String(owner string) string {
 // Action describes one explicitly configured command that runs to completion.
 // Its owner supplies any omitted execution context.
 type Action struct {
-	Command     string            `yaml:"command"`
-	Description string            `yaml:"description,omitempty"`
-	Dir         string            `yaml:"dir,omitempty"`
-	Shell       string            `yaml:"shell,omitempty"`
-	Env         map[string]string `yaml:"env,omitempty"`
-	EnvFiles    []string          `yaml:"env_files,omitempty"`
-	Timeout     time.Duration     `yaml:"timeout,omitempty"`
-	Confirm     *bool             `yaml:"confirm,omitempty"`
-	Interactive *bool             `yaml:"interactive,omitempty"`
+	Command     string                 `yaml:"command,omitempty"`
+	Description string                 `yaml:"description,omitempty"`
+	Dir         string                 `yaml:"dir,omitempty"`
+	Shell       string                 `yaml:"shell,omitempty"`
+	Env         map[string]string      `yaml:"env,omitempty"`
+	EnvFiles    []string               `yaml:"env_files,omitempty"`
+	Timeout     time.Duration          `yaml:"timeout,omitempty"`
+	Confirm     *bool                  `yaml:"confirm,omitempty"`
+	Interactive *bool                  `yaml:"interactive,omitempty"`
+	Run         ArgvList               `yaml:"run,omitempty"`
+	Argv        ArgvList               `yaml:"argv,omitempty"`
+	Params      map[string]ActionParam `yaml:"params,omitempty"`
+	ParamOrder  []string               `yaml:"-"`
+	// ParamValues and CommandPreview carry one invocation's normalized values
+	// and display preview through the runner. They are never loaded from
+	// configuration and never take part in definition equality.
+	ParamValues    map[string]any `yaml:"-" json:"-"`
+	CommandPreview string         `yaml:"-" json:"-"`
 }
 
 // ConfirmationRequired resolves the optional confirmation flag.

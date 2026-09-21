@@ -79,6 +79,10 @@ type RunSummary struct {
 	StartReason string             `json:"start_reason,omitempty"`
 	Live        bool               `json:"live"`
 	Output      RunOutputSummary   `json:"output"`
+	// Params and CommandPreview record the invocation of a parameterized
+	// action so its provenance survives a configuration reload.
+	Params         map[string]any `json:"params,omitempty"`
+	CommandPreview string         `json:"command_preview,omitempty"`
 }
 
 // RunRetentionBoundary describes the independent catalog and output budgets
@@ -355,11 +359,29 @@ func (c *RunCatalog) update(target RunTarget, run uint32, update func(*RunSummar
 // catalog state that is only safe to touch under the mutex.
 func cloneRunSummary(summary RunSummary) RunSummary {
 	summary.Cause = cloneStateCause(summary.Cause)
+	summary.Params = cloneAnyMap(summary.Params)
 	if summary.ExitCode != nil {
 		exit := *summary.ExitCode
 		summary.ExitCode = &exit
 	}
 	return summary
+}
+
+// cloneAnyMap copies one shallow invocation value map so a reader cannot reach
+// the slice values retained by a catalog or runner record.
+func cloneAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		if list, ok := value.([]string); ok {
+			cloned[key] = append([]string(nil), list...)
+			continue
+		}
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cloneStateCause(cause *config.StateCause) *config.StateCause {

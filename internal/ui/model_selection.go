@@ -167,6 +167,10 @@ func (m *Model) toggleListMode() {
 	} else {
 		m.listMode = listServices
 	}
+	// The parameter focus belongs to a row that is no longer on screen. Left
+	// behind, it would keep drawing the cursor on a setting while the keys
+	// acted on whatever service the list actually points at.
+	m.focusedParam = nil
 	m.detailOffset = 0
 }
 

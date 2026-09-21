@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/kranz-org/kranz/internal/actionparams"
 	"github.com/kranz-org/kranz/internal/app"
 	"github.com/kranz-org/kranz/internal/config"
 )
@@ -55,6 +56,11 @@ func (m *Model) renderActionDetails(width, height int) string {
 	if !exists {
 		return renderTitledPanel(m.panelStyle(panelDetails), m.panelTitleStyle(panelDetails), contentWidth, contentHeight, "[2] ACTION", []string{"", "No action selected"})
 	}
+	// The cursor inside a parameter tree is asking about that parameter, so the
+	// panel answers about it instead of repeating the action it belongs to.
+	if lines := m.focusedParameterDetailLines(id, contentWidth); lines != nil {
+		return renderDetailViewport(m, "[2] PARAMETER", lines, contentWidth, contentHeight)
+	}
 	lines := m.actionDetailLines(id, action, state, contentWidth)
 	return renderDetailViewport(m, "[2] ACTION", lines, contentWidth, contentHeight)
 }
@@ -74,11 +80,15 @@ func (m *Model) actionDetailLines(id config.ActionID, action config.Action, stat
 	if action.Timeout > 0 {
 		lines = append(lines, detailFieldLines("TIMEOUT", action.Timeout.String(), contentWidth)...)
 	}
+	// A parameterized action is described by the invocation the current form
+	// values produce, not by the declaration behind it.
+	render, renderErr := m.renderActionParams(id)
+	parameterized := m.actionHasParams(id)
 	mode := "captured"
 	if action.InteractiveEnabled() {
 		mode = "interactive terminal handoff"
 	}
-	if action.ConfirmationRequired() {
+	if action.ConfirmationRequired() || (parameterized && renderErr == nil && render.Confirm) {
 		mode += " · confirmation required"
 	}
 	lines = append(lines, detailFieldLines("MODE", mode, contentWidth)...)
@@ -88,8 +98,115 @@ func (m *Model) actionDetailLines(id config.ActionID, action config.Action, stat
 			lines = append(lines, detailFieldLines("RESULT", fmt.Sprintf("exit %d · %s", state.ExitCode, state.Duration.Round(time.Millisecond)), contentWidth)...)
 		}
 	}
-	lines = append(lines, detailFieldLines("COMMAND", action.Command, contentWidth)...)
+	command := action.Command
+	problem := ""
+	if parameterized {
+		if renderErr == nil {
+			command = render.Preview
+		} else {
+			command = m.paramFallbackCommand(id)
+			problem = m.paramCommandProblem(id)
+		}
+	}
+	lines = append(lines, detailFieldLines("COMMAND", command, contentWidth)...)
+	if problem != "" {
+		lines = append(lines, detailFieldLines("PROBLEM", ParamErrorStyle.Render(problem), contentWidth)...)
+	}
+	if parameterized && renderErr == nil && len(render.Reasons) > 0 {
+		lines = append(lines, detailFieldLines("ASKS", strings.Join(render.Reasons, " · "), contentWidth)...)
+	}
 	return lines
+}
+
+// focusedParameterDetailLines describes the parameter the list cursor sits on:
+// what it accepts, what it holds now, and which of its values ask before they
+// run. Without it the panel would keep describing the action while the cursor
+// is already inside its settings.
+func (m *Model) focusedParameterDetailLines(id config.ActionID, contentWidth int) []string {
+	focus := m.focusedParam
+	if focus == nil || focus.Preview || focus.ID != id {
+		return nil
+	}
+	for _, spec := range m.actionParamSpecs(id) {
+		if spec.Name != focus.Name {
+			continue
+		}
+		lines := []string{ContextBarStyle.Render(id.Name+" → ") + DetailLabelStyle.Render(spec.Name)}
+		if spec.Prompt != "" {
+			lines = append(lines, detailFieldLines("ABOUT", spec.Prompt, contentWidth)...)
+		}
+		lines = append(lines, detailFieldLines("ACCEPTS", parameterAcceptance(spec), contentWidth)...)
+		if spec.Constraint != "" {
+			lines = append(lines, detailFieldLines("LIMITS", spec.Constraint, contentWidth)...)
+		}
+		value := ansi.Strip(m.paramRowText(id, spec.Name))
+		if m.paramEditing(id, spec.Name) {
+			value = m.paramInput.Value()
+		}
+		lines = append(lines, detailFieldLines("VALUE", value, contentWidth)...)
+		if reason := m.paramRowError(id, spec.Name); reason != "" {
+			lines = append(lines, detailFieldLines("PROBLEM", ParamErrorStyle.Render(reason), contentWidth)...)
+		} else if problem := m.paramCommandProblem(id); problem != "" {
+			lines = append(lines, detailFieldLines("BLOCKED BY", ParamErrorStyle.Render(problem), contentWidth)...)
+		}
+		if len(spec.Options) > 0 {
+			lines = append(lines, DetailLabelStyle.Render("OPTIONS"))
+			for _, option := range spec.Options {
+				label := option.Value
+				if option.Label != "" && option.Label != option.Value {
+					label += " (" + option.Label + ")"
+				}
+				if option.Confirm != "" {
+					label += " (asks: " + option.Confirm + ")"
+				}
+				marker := m.paramValueMarker(id, spec.Name, option.Value)
+				lines = append(lines, detailIndentedValueLines(marker+" "+label, "  ↳ ", contentWidth)...)
+			}
+		}
+		if spec.Confirm != "" {
+			lines = append(lines, detailFieldLines("ASKS", spec.Confirm, contentWidth)...)
+		}
+		if m.paramEditing(id, spec.Name) {
+			lines = append(lines, "", ContextBarStyle.Render("Hint  Enter keeps the value · Esc restores it"))
+		}
+		return lines
+	}
+	return nil
+}
+
+// parameterAcceptance spells out what one control takes, so the panel answers
+// "what can I put here" without opening the configuration.
+func parameterAcceptance(spec paramUISpec) string {
+	kind := spec.Control.String()
+	if spec.Control == actionparams.Checkbox && len(spec.Options) > 0 {
+		kind = "checkbox group · several values"
+	}
+	switch {
+	case spec.Required:
+		kind += " · required"
+	case spec.Optional:
+		kind += " · optional"
+	}
+	if spec.Default != nil {
+		kind += " · default " + defaultValueText(spec.Default)
+	}
+	return kind
+}
+
+func defaultValueText(value *actionparams.Value) string {
+	switch value.Kind {
+	case actionparams.KindBool:
+		if value.Bool {
+			return "yes"
+		}
+		return "no"
+	case actionparams.KindInt:
+		return strconv.FormatInt(value.Int, 10)
+	case actionparams.KindStrings:
+		return strings.Join(value.Strings, ", ")
+	default:
+		return value.Text
+	}
 }
 
 func (m *Model) renderActionGroupDetails(group string, width, height int) string {

@@ -50,7 +50,7 @@ func helpSections() []helpSection {
 			{"1 / 2 / 3", "Focus Services, Details, or Logs; 1 toggles Services/Tags when already focused"},
 			{"Tab / Shift+Tab", "Focus the next or previous panel, including pinned logs"},
 			{"↑/↓ j/k", "Navigate or scroll the focused panel"},
-			{"←/→", "Cycle Services/Tags while the list panel is focused"},
+			{"←/→", "Cycle Services/Tags, or change the focused parameter's value"},
 			{"t", "Toggle Services/Tags from any panel"},
 			{"Enter", "Expand or collapse a service, action group, or tag"},
 		}},
@@ -62,6 +62,14 @@ func helpSections() []helpSection {
 			{"r / Shift+R", "Restart the selected service or all running services"},
 			{"Shift+T", "Clear selected tags"},
 			{"h / n", "Open health history or the notification center"},
+		}},
+		{title: "ACTION PARAMETERS", entries: []helpEntry{
+			{"Enter", "Open an action's parameters, a parameter's values, or a text field"},
+			{"Space", "Mark the focused value or toggle the focused checkbox"},
+			{"←/→", "Walk a list of values, or count a number; Shift counts by ten"},
+			{"d", "Switch the focused parameter off, leaving it out of the command"},
+			{"c", "Open every value of the focused action as a form"},
+			{"s", "Run what the command line shows; Shift+S is for services, not actions"},
 		}},
 		{title: "LOGS & RUN HISTORY", entries: []helpEntry{
 			{"3", "Switch focus between pinned and current logs"},
@@ -407,8 +415,24 @@ func (m *Model) renderActionStartConfirmationBody(id config.ActionID, action con
 	if action.Description != "" {
 		body = append(body, ServiceNameStyle.Render(action.Description))
 	}
-	body = append(body, "", DetailLabelStyle.Render("COMMAND"))
 	commandWidth := max(20, min(58, m.width-20))
+	if m.pendingParamRequest != nil {
+		if render, err := m.renderActionParams(id); err == nil {
+			body = append(body, "", DetailLabelStyle.Render("PARAMETERS"))
+			for _, spec := range m.actionParamSpecs(id) {
+				body = append(body, "  "+LogSystemStyle.Render(spec.Name+": "+m.paramValueText(id, spec)))
+			}
+			body = append(body, "", DetailLabelStyle.Render("COMMAND PREVIEW"))
+			for _, line := range wrapDetailValue(render.Preview, commandWidth) {
+				body = append(body, "  "+LogSystemStyle.Render(line))
+			}
+			for _, reason := range render.Reasons {
+				body = append(body, "  "+LogWarnStyle.Render("⚠ "+reason))
+			}
+			return body
+		}
+	}
+	body = append(body, "", DetailLabelStyle.Render("COMMAND"))
 	for _, line := range wrapDetailValue(action.Command, commandWidth) {
 		body = append(body, "  "+LogSystemStyle.Render(line))
 	}

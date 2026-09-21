@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/kranz-org/kranz/internal/actionparams"
 	"github.com/kranz-org/kranz/internal/app"
 	"github.com/kranz-org/kranz/internal/config"
 	"gopkg.in/yaml.v3"
@@ -217,7 +219,29 @@ type actionResourceEntry struct {
 	Description      string           `json:"description,omitempty"`
 	Interactive      bool             `json:"interactive"`
 	Confirm          bool             `json:"confirm"`
+	Parameters       bool             `json:"parameters"`
+	Params           []paramSpec      `json:"params,omitempty"`
+	ParamsSchema     map[string]any   `json:"params_schema,omitempty"`
 	State            app.ActionResult `json:"state"`
+}
+
+// paramSpec is the advisory parameter description returned by action_info.
+type paramSpec struct {
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Options  []string `json:"options,omitempty"`
+	Default  any      `json:"default,omitempty"`
+	Required bool     `json:"required"`
+	Optional bool     `json:"optional,omitempty"`
+	Prompt   string   `json:"description,omitempty"`
+	// Confirm is the reason this parameter asks for confirmation when it is
+	// switched on, and ConfirmOptions the same per selectable option. A caller
+	// reads them to know which values turn a run into a confirmed one.
+	Confirm        string            `json:"confirm,omitempty"`
+	ConfirmOptions map[string]string `json:"confirm_options,omitempty"`
+	// Constraint is what a value has to satisfy, in the same words the CLI and
+	// the TUI use. The machine-readable bounds stay in params_schema.
+	Constraint string `json:"constraint,omitempty"`
 }
 
 func (s *scope) actionsResource(context.Context) ResultEnvelope {
@@ -233,9 +257,52 @@ func (s *scope) actionEntries(owner string) []actionResourceEntry {
 		}
 		definition, _ := cfg.ResolveAction(id)
 		state, _ := s.api.ActionState(id)
-		entries = append(entries, actionResourceEntry{ID: id.Owner + "/" + id.Name, Owner: id.Owner, OwnerKind: id.OwnerKind, OwnerDescription: actionOwnerDescription(cfg, id), Name: id.Name, Description: definition.Description, Interactive: definition.InteractiveEnabled(), Confirm: definition.ConfirmationRequired(), State: state})
+		specs, schema := actionParamMetadata(id, definition)
+		entries = append(entries, actionResourceEntry{ID: id.Owner + "/" + id.Name, Owner: id.Owner, OwnerKind: id.OwnerKind, OwnerDescription: actionOwnerDescription(cfg, id), Name: id.Name, Description: definition.Description, Interactive: definition.InteractiveEnabled(), Confirm: definition.ConfirmationRequired(), Parameters: len(definition.Params) > 0, Params: specs, ParamsSchema: schema, State: state})
 	}
 	return entries
+}
+
+// actionParamMetadata reports one action's advisory parameter description and
+// JSON Schema fragment. The schema helps a client build a form; the runtime
+// remains the authoritative validation boundary.
+func actionParamMetadata(id config.ActionID, action config.Action) ([]paramSpec, map[string]any) {
+	if len(action.Params) == 0 {
+		return nil, nil
+	}
+	order := action.ParamOrder
+	if len(order) == 0 {
+		for name := range action.Params {
+			order = append(order, name)
+		}
+		sort.Strings(order)
+	}
+	specs := make([]paramSpec, 0, len(order))
+	for _, name := range order {
+		param, exists := action.Params[name]
+		if !exists {
+			continue
+		}
+		spec := paramSpec{Name: name, Type: param.Type, Default: param.Default, Required: param.Required, Optional: param.Optional, Prompt: param.Prompt, Confirm: param.Confirm}
+		for _, option := range param.Options {
+			spec.Options = append(spec.Options, option.Value)
+			if option.Confirm != "" {
+				if spec.ConfirmOptions == nil {
+					spec.ConfirmOptions = map[string]string{}
+				}
+				spec.ConfirmOptions[option.Value] = option.Confirm
+			}
+		}
+		specs = append(specs, spec)
+	}
+	compiled, err := config.CompileAction(string(id.OwnerKind)+"/"+id.Owner+"/"+id.Name, action)
+	if err != nil || compiled == nil {
+		return specs, nil
+	}
+	for index := range specs {
+		specs[index].Constraint = compiled.Params[specs[index].Name].Constraint()
+	}
+	return specs, actionparams.JSONSchema(compiled)
 }
 
 func actionOwnerDescription(cfg *config.Config, id config.ActionID) string {

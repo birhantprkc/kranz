@@ -107,14 +107,27 @@ func (r *ActionRunner) AcquireInteractive(id config.ActionID) (config.Action, st
 
 func (r *ActionRunner) AcquireInteractiveContext(ctx context.Context, id config.ActionID) (config.Action, string, error) {
 	r.mu.Lock()
-	if r.shuttingDown {
-		r.mu.Unlock()
-		return config.Action{}, "", ErrActionRunnerStopping
-	}
 	action, exists := r.cfg.ResolveAction(id)
 	if !exists {
 		r.mu.Unlock()
 		return config.Action{}, "", fmt.Errorf("%w: %s/%s", ErrActionNotFound, id.Owner, id.Name)
+	}
+	return r.acquireInteractiveLocked(ctx, id, action)
+}
+
+// AcquireInteractiveDefinitionContext reserves the exact rendered definition
+// that passed parameter validation and confirmation. It must not resolve the
+// action by ID again: a reload between confirmation and terminal handoff may
+// otherwise substitute a different command.
+func (r *ActionRunner) AcquireInteractiveDefinitionContext(ctx context.Context, id config.ActionID, action config.Action) (config.Action, string, error) {
+	r.mu.Lock()
+	return r.acquireInteractiveLocked(ctx, id, action)
+}
+
+func (r *ActionRunner) acquireInteractiveLocked(ctx context.Context, id config.ActionID, action config.Action) (config.Action, string, error) {
+	if r.shuttingDown {
+		r.mu.Unlock()
+		return config.Action{}, "", ErrActionRunnerStopping
 	}
 	if !action.InteractiveEnabled() {
 		r.mu.Unlock()
@@ -137,14 +150,16 @@ func (r *ActionRunner) AcquireInteractiveContext(ctx context.Context, id config.
 	started := time.Now()
 	run := r.nextRun[id] + 1
 	r.nextRun[id] = run
-	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started}
+	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started,
+		Params: cloneAnyMap(action.ParamValues), CommandPreview: action.CommandPreview}
 	r.mu.Unlock()
 	provenance := RunProvenanceFromContext(ctx)
 	if provenance.StartReason == "" {
 		provenance.StartReason = "interactive_handoff"
 	}
 	r.catalog.Begin(RunSummary{Target: ActionRunTarget(id), Run: run, Status: ActionRunning.String(), StartedAt: started,
-		Surface: provenance.Surface, ClientLabel: provenance.ClientLabel, StartReason: provenance.StartReason})
+		Surface: provenance.Surface, ClientLabel: provenance.ClientLabel, StartReason: provenance.StartReason,
+		Params: cloneAnyMap(action.ParamValues), CommandPreview: action.CommandPreview})
 	return action, lease, nil
 }
 
@@ -166,7 +181,7 @@ func (r *ActionRunner) CompleteInteractive(id config.ActionID, lease string, exi
 	result := ActionResult{
 		ID: id, Run: run, Status: ActionSucceeded, StartedAt: started,
 		FinishedAt: time.Now(), Stdout: []string{interactiveHandoffNotice},
-		ExitCode: exitCode, PID: pid,
+		ExitCode: exitCode, PID: pid, Params: cloneAnyMap(state.Params), CommandPreview: state.CommandPreview,
 	}
 	result.Duration = result.FinishedAt.Sub(result.StartedAt)
 	if runErr != nil || result.ExitCode != 0 {
@@ -189,13 +204,18 @@ func (r *ActionRunner) CompleteInteractive(id config.ActionID, lease string, exi
 }
 
 func interactiveCommand(action config.Action) *exec.Cmd {
-	shell := action.Shell
-	if shell == "" {
-		shell = "sh"
+	var command *exec.Cmd
+	if len(action.Argv) > 0 {
+		command = exec.Command(action.Argv[0], action.Argv[1:]...)
+	} else {
+		shell := action.Shell
+		if shell == "" {
+			shell = "sh"
+		}
+		command = exec.Command(shell, "-c", action.Command)
 	}
 	// The action keeps the terminal it was given, so no process group of its
 	// own: Ctrl+C must reach the command the user is looking at.
-	command := exec.Command(shell, "-c", action.Command)
 	command.Dir = action.Dir
 	command.Env = os.Environ()
 	for name, value := range action.Env {
@@ -217,6 +237,10 @@ func (m *Manager) AcquireInteractiveAction(id config.ActionID) (config.Action, s
 
 func (m *Manager) AcquireInteractiveActionContext(ctx context.Context, id config.ActionID) (config.Action, string, error) {
 	return m.actions.AcquireInteractiveContext(ctx, id)
+}
+
+func (m *Manager) AcquireInteractiveActionDefinitionContext(ctx context.Context, id config.ActionID, action config.Action) (config.Action, string, error) {
+	return m.actions.AcquireInteractiveDefinitionContext(ctx, id, action)
 }
 
 // CompleteInteractiveAction finishes an AcquireInteractiveAction lease with

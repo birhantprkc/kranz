@@ -29,6 +29,14 @@ func causalError(err error) *CausalError {
 	if errors.As(err, &confirmationRequired) {
 		return &CausalError{Code: "confirmation_required", Message: confirmationRequired.Error(), Hint: "Review the resolved plan, then repeat the same tool call with its confirmation_token.", Details: map[string]any{"plan": confirmationRequired.Plan, "confirmation_token": confirmationRequired.Plan.ConfirmationToken}}
 	}
+	var invalidArguments *app.InvalidArgumentsError
+	if errors.As(err, &invalidArguments) {
+		details := map[string]any{"action": invalidArguments.Action}
+		if fields := invalidArguments.Fields; len(fields) > 0 {
+			details["fields"] = fields
+		}
+		return &CausalError{Code: "invalid_arguments", Message: invalidArguments.Error(), Hint: "Call action_info for the accepted parameters, then retry with corrected values.", Details: details}
+	}
 	var confirmation *app.ConfirmationError
 	if errors.As(err, &confirmation) {
 		return &CausalError{Code: confirmation.Code, Message: confirmation.Message, Hint: "Request a fresh plan before retrying."}

@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/kranz-org/kranz/internal/actionparams"
 )
 
 var uiHexColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
@@ -45,7 +47,7 @@ func Validate(cfg *Config) error {
 		if err := validateServiceLifecycle(name, svc); err != nil {
 			return err
 		}
-		if err := validateActions(fmt.Sprintf("service %q", name), svc.Actions); err != nil {
+		if err := validateActions(cfg, fmt.Sprintf("service %q", name), svc.Actions); err != nil {
 			return err
 		}
 		if err := validatePrerequisites(cfg, name, svc); err != nil {
@@ -126,7 +128,7 @@ func Validate(cfg *Config) error {
 		if _, taken := cfg.Services[name]; taken {
 			return fmt.Errorf("action group %q collides with the service of the same name: rename one so its actions stay addressable", name)
 		}
-		if err := validateActions(fmt.Sprintf("action group %q", name), group.Actions); err != nil {
+		if err := validateActions(cfg, fmt.Sprintf("action group %q", name), group.Actions); err != nil {
 			return err
 		}
 	}
@@ -163,6 +165,9 @@ func validateServiceLifecycle(name string, svc Service) error {
 		}
 		if action.InteractiveEnabled() {
 			return fmt.Errorf("service %q lifecycle.%s: interactive execution is not supported", name, role)
+		}
+		if len(action.Params) > 0 || len(action.Run) > 0 || len(action.Argv) > 0 {
+			return fmt.Errorf("service %q lifecycle.%s: parameters are not supported on lifecycle actions", name, role)
 		}
 	}
 	if mode == SupervisionProcess {
@@ -238,20 +243,58 @@ func validatePrerequisites(cfg *Config, name string, svc Service) error {
 		if action.InteractiveEnabled() {
 			return fmt.Errorf("%s: %s is interactive and cannot be a prerequisite", position, prerequisite.String(name))
 		}
+		if err := validatePrerequisiteParams(name, position, prerequisite, action); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func validateActions(owner string, actions map[string]Action) error {
+// validatePrerequisiteParams resolves static prerequisite values at load time so
+// a missing or mistyped value is a configuration error, not a first-start
+// failure.
+func validatePrerequisiteParams(owner, position string, prerequisite Prerequisite, action Action) error {
+	id := prerequisite.ActionID(owner)
+	compiled, err := CompileAction(string(id.OwnerKind)+"/"+id.Owner+"/"+id.Name, action)
+	if err != nil {
+		return fmt.Errorf("%s: %w", position, err)
+	}
+	if len(prerequisite.Params) == 0 {
+		return nil
+	}
+	if compiled == nil || !compiled.HasParams() {
+		return fmt.Errorf("%s: %s does not accept parameters", position, prerequisite.String(owner))
+	}
+	raw, err := RawValuesFromAny(prerequisite.Params)
+	if err != nil {
+		return fmt.Errorf("%s: %w", position, err)
+	}
+	if _, err := actionparams.Normalize(compiled, raw); err != nil {
+		return fmt.Errorf("%s: %w", position, err)
+	}
+	return nil
+}
+
+func validateActions(cfg *Config, owner string, actions map[string]Action) error {
 	for name, action := range actions {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("%s: action name cannot be empty", owner)
 		}
-		if strings.TrimSpace(action.Command) == "" {
+		structured := len(action.Run) > 0 || len(action.Argv) > 0 || len(action.Params) > 0
+		if !structured && strings.TrimSpace(action.Command) == "" {
 			return fmt.Errorf("%s action %q: field 'command' is required", owner, name)
 		}
 		if action.Timeout < 0 {
 			return fmt.Errorf("%s action %q: timeout cannot be negative", owner, name)
+		}
+		compiled, err := CompileAction(owner+"/"+name, action)
+		if err != nil {
+			return fmt.Errorf("%s action %q: %w", owner, name, err)
+		}
+		if compiled != nil && cfg != nil {
+			for _, unused := range compiled.Unused() {
+				cfg.Diagnostics = append(cfg.Diagnostics, fmt.Sprintf("%s action %q: parameter %q is declared but never used", owner, name, unused))
+			}
 		}
 	}
 	return nil

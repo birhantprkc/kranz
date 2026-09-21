@@ -17,10 +17,11 @@ import (
 // those are tried directly, which is also what proves a shell completing them
 // writes a command the CLI accepts.
 var optionValues = map[string]string{
-	"N":       "1",
-	"NAME":    "sample",
-	"COMMAND": "true",
-	"D":       "5m",
+	"N":          "1",
+	"NAME":       "sample",
+	"COMMAND":    "true",
+	"D":          "5m",
+	"NAME=VALUE": "target=phone",
 }
 
 // usageFailures are the codes that mean the CLI did not recognize what it was

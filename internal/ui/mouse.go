@@ -242,6 +242,9 @@ func (m *Model) handleServiceRowClick(row, listHeight, column int) {
 		owner = actionOwnerKey(config.ActionOwnerService, rows[index].Service.Name)
 	case actionRowGroup:
 		owner = actionOwnerKey(config.ActionOwnerGroup, rows[index].Group)
+	case actionRowParam, actionRowParamValue:
+		m.toggleFocusedParamRow()
+		return
 	default:
 		return
 	}

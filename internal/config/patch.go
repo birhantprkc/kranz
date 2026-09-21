@@ -105,9 +105,54 @@ func applyConfigPatchNode(base *Config, patchRoot *yaml.Node) error {
 	for _, name := range mappingNodeKeyOrder(patchRoot, "action_groups") {
 		result.ActionGroupOrder = appendUniqueString(result.ActionGroupOrder, name)
 	}
+	restorePatchedDeclarationOrder(&result, base, patchRoot)
 	synchronizePatchedStartSyntax(&result, patchRoot)
 	*base = result
 	return nil
+}
+
+// restorePatchedDeclarationOrder carries action and parameter declaration order
+// across the YAML round trip an override performs. That order is recorded from
+// the source text rather than from the marshalled struct, so without this an
+// override of any unrelated field would silently reshuffle a listed action's
+// parameters into map order. Keys the override introduces follow the inherited
+// ones, exactly as a new service or group does.
+func restorePatchedDeclarationOrder(result, base *Config, patchRoot *yaml.Node) {
+	for name, service := range result.Services {
+		baseService := base.Services[name]
+		service.ActionOrder = inheritedKeyOrder(baseService.ActionOrder, patchRoot, "services", name, "actions")
+		for actionName, action := range service.Actions {
+			action.ParamOrder = inheritedKeyOrder(baseService.Actions[actionName].ParamOrder, patchRoot, "services", name, "actions", actionName, "params")
+			service.Actions[actionName] = action
+		}
+		result.Services[name] = service
+	}
+	for name, group := range result.ActionGroups {
+		baseGroup := base.ActionGroups[name]
+		group.ActionOrder = inheritedKeyOrder(baseGroup.ActionOrder, patchRoot, "action_groups", name, "actions")
+		for actionName, action := range group.Actions {
+			action.ParamOrder = inheritedKeyOrder(baseGroup.Actions[actionName].ParamOrder, patchRoot, "action_groups", name, "actions", actionName, "params")
+			group.Actions[actionName] = action
+		}
+		result.ActionGroups[name] = group
+	}
+}
+
+// inheritedKeyOrder is the base order followed by the keys the patch adds at
+// the given path.
+func inheritedKeyOrder(inherited []string, patchRoot *yaml.Node, path ...string) []string {
+	order := append([]string(nil), inherited...)
+	mapping := patchRoot
+	for _, key := range path {
+		mapping = mappingValue(mapping, key)
+		if mapping == nil || mapping.Kind != yaml.MappingNode {
+			return order
+		}
+	}
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		order = appendUniqueString(order, mapping.Content[index].Value)
+	}
+	return order
 }
 
 func mappingNodeKeyOrder(root *yaml.Node, key string) []string {

@@ -52,6 +52,7 @@ const (
 	methodActionResult                    = "actionResult"
 	methodCancelAction                    = "cancelAction"
 	methodAcquireInteractiveAction        = "acquireInteractiveAction"
+	methodAcquireInteractivePlan          = "acquireInteractivePlan"
 	methodCompleteInteractiveAction       = "completeInteractiveAction"
 	methodRuns                            = "runs"
 	methodRunRetention                    = "runRetention"
@@ -199,6 +200,12 @@ type cancelActionResponse struct {
 type acquireInteractiveActionResponse struct {
 	Action config.Action `json:"action"`
 	Lease  string        `json:"lease"`
+}
+
+type acquireInteractivePlanResponse struct {
+	Plan   app.OperationPlan `json:"plan"`
+	Action config.Action     `json:"action"`
+	Lease  string            `json:"lease"`
 }
 
 type completeInteractiveActionRequest struct {

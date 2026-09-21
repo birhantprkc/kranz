@@ -6,8 +6,21 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/kranz-org/kranz/internal/actionparams"
 	"github.com/kranz-org/kranz/internal/config"
 )
+
+// prereqKey distinguishes one prerequisite invocation. Two services that
+// declare the same action with different values are different prerequisites and
+// must never collapse into one satisfied result.
+type prereqKey struct {
+	id         config.ActionID
+	invocation string
+}
+
+func actionRuntimeKey(id config.ActionID) string {
+	return string(id.OwnerKind) + "/" + id.Owner + "/" + id.Name
+}
 
 // ErrPrerequisiteFailed reports that a service did not start because one of its
 // before_start actions did not succeed. The service stays stopped; Kranz never
@@ -44,17 +57,22 @@ func (m *Manager) runPrerequisite(ctx context.Context, svc *Service, prerequisit
 	id := prerequisite.ActionID(svc.Name)
 	label := prerequisite.String(svc.Name)
 	once := prerequisite.RunPolicy() == config.PrerequisiteOnce
+	definition, invocationKey, err := m.resolvePrerequisiteDefinition(id, prerequisite)
+	if err != nil {
+		return prerequisiteError(svc, id, 0, label, err)
+	}
+	key := prereqKey{id: id, invocation: invocationKey}
 
 	m.prereqMu.Lock()
-	if once && m.prereqSatisfied[id] {
+	if once && m.prereqSatisfied[key] {
 		m.prereqMu.Unlock()
 		svc.AppendLog("[Kranz] Prerequisite already satisfied: " + label)
 		return nil
 	}
-	if active, running := m.prereqRuns[id]; running {
+	if active, running := m.prereqRuns[key]; running {
 		m.prereqMu.Unlock()
-		// Another service reached the same prerequisite first. Wait for its
-		// result rather than starting a second copy of the same command.
+		// Another service reached the same prerequisite invocation first. Wait
+		// for its result rather than starting a second copy of the same command.
 		svc.AppendLog("[Kranz] Waiting for prerequisite: " + label)
 		select {
 		case <-active.done:
@@ -68,23 +86,23 @@ func (m *Manager) runPrerequisite(ctx context.Context, svc *Service, prerequisit
 		return nil
 	}
 	run := &prereqRun{done: make(chan struct{})}
-	m.prereqRuns[id] = run
+	m.prereqRuns[key] = run
 	m.prereqMu.Unlock()
 
 	svc.AppendLog("[Kranz] Running prerequisite: " + label)
-	result, err := m.actions.Run(ctx, id)
+	result, err := m.actions.RunDefinition(ctx, id, definition)
 	prerequisiteRun := result.Run
 	if err != nil {
 		err = describePrerequisiteFailure(result, err)
 	}
 
 	m.prereqMu.Lock()
-	delete(m.prereqRuns, id)
+	delete(m.prereqRuns, key)
 	if err == nil && once {
 		if m.prereqSatisfied == nil {
-			m.prereqSatisfied = make(map[config.ActionID]bool)
+			m.prereqSatisfied = make(map[prereqKey]bool)
 		}
-		m.prereqSatisfied[id] = true
+		m.prereqSatisfied[key] = true
 	}
 	m.prereqMu.Unlock()
 	run.err = err
@@ -95,6 +113,37 @@ func (m *Manager) runPrerequisite(ctx context.Context, svc *Service, prerequisit
 	}
 	svc.AppendLog("[Kranz] Prerequisite satisfied: " + label)
 	return nil
+}
+
+// resolvePrerequisiteDefinition renders a prerequisite's immutable definition
+// and its invocation identity. A prerequisite without params keeps its
+// configured action unchanged.
+func (m *Manager) resolvePrerequisiteDefinition(id config.ActionID, prerequisite config.Prerequisite) (config.Action, string, error) {
+	action, exists := m.cfg.ResolveAction(id)
+	if !exists {
+		return config.Action{}, "", fmt.Errorf("%w: %s/%s", ErrActionNotFound, id.Owner, id.Name)
+	}
+	compiled, err := config.CompileAction(actionRuntimeKey(id), action)
+	if err != nil {
+		return config.Action{}, "", err
+	}
+	if compiled == nil || !compiled.HasParams() {
+		return action, "", nil
+	}
+	raw, err := config.RawValuesFromAny(prerequisite.Params)
+	if err != nil {
+		return config.Action{}, "", err
+	}
+	invocation, err := actionparams.Normalize(compiled, raw)
+	if err != nil {
+		return config.Action{}, "", err
+	}
+	rendered, err := actionparams.Render(compiled, invocation)
+	if err != nil {
+		return config.Action{}, "", err
+	}
+	values := actionparams.NativeValues(invocation)
+	return action.RenderedAction(rendered, values), actionparams.InvocationKey(actionRuntimeKey(id), invocation), nil
 }
 
 // PrerequisiteError reports which service did not start, which action gated it,
@@ -153,11 +202,11 @@ func describePrerequisiteFailure(result ActionResult, err error) error {
 func (m *Manager) forgetChangedPrerequisites(current, next *config.Config) {
 	m.prereqMu.Lock()
 	defer m.prereqMu.Unlock()
-	for id := range m.prereqSatisfied {
-		currentAction, currentExists := current.ResolveAction(id)
-		nextAction, nextExists := next.ResolveAction(id)
+	for key := range m.prereqSatisfied {
+		currentAction, currentExists := current.ResolveAction(key.id)
+		nextAction, nextExists := next.ResolveAction(key.id)
 		if !currentExists || !nextExists || !reflect.DeepEqual(currentAction, nextAction) {
-			delete(m.prereqSatisfied, id)
+			delete(m.prereqSatisfied, key)
 		}
 	}
 }

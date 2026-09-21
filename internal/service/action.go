@@ -100,6 +100,11 @@ type ActionResult struct {
 	Error      string          `json:"error,omitempty"`
 	Stdout     []string        `json:"stdout,omitempty"`
 	Stderr     []string        `json:"stderr,omitempty"`
+	// Params holds the normalized invocation values and CommandPreview the
+	// display-only command of a parameterized action. Both are omitted for a
+	// static action.
+	Params         map[string]any `json:"params,omitempty"`
+	CommandPreview string         `json:"command_preview,omitempty"`
 }
 
 // ActionBusyError identifies the action currently occupying an owner.
@@ -265,14 +270,15 @@ func (r *ActionRunner) RunDefinition(ctx context.Context, id config.ActionID, ac
 	started := time.Now()
 	run := r.nextRun[id] + 1
 	r.nextRun[id] = run
-	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started}
+	r.states[id] = ActionResult{ID: id, Run: run, Status: ActionRunning, ExitCode: -1, StartedAt: started, Params: cloneAnyMap(action.ParamValues), CommandPreview: action.CommandPreview}
 	r.mu.Unlock()
 	provenance := RunProvenanceFromContext(ctx)
 	if provenance.StartReason == "" {
 		provenance.StartReason = "invoked"
 	}
 	r.catalog.Begin(RunSummary{Target: ActionRunTarget(id), Run: run, Status: ActionRunning.String(), StartedAt: started,
-		Surface: provenance.Surface, ClientLabel: provenance.ClientLabel, StartReason: provenance.StartReason})
+		Surface: provenance.Surface, ClientLabel: provenance.ClientLabel, StartReason: provenance.StartReason,
+		Params: cloneAnyMap(action.ParamValues), CommandPreview: action.CommandPreview})
 
 	stream := r.logStreamFor(id)
 	if stream != nil {
@@ -299,14 +305,22 @@ func (r *ActionRunner) RunDefinition(ctx context.Context, id config.ActionID, ac
 }
 
 func (r *ActionRunner) execute(ctx context.Context, id config.ActionID, action config.Action, run uint32, started time.Time, stream *logStream) (ActionResult, error) {
-	result := ActionResult{ID: id, Run: run, Status: ActionFailed, ExitCode: -1, StartedAt: started}
+	result := ActionResult{ID: id, Run: run, Status: ActionFailed, ExitCode: -1, StartedAt: started, Params: cloneAnyMap(action.ParamValues), CommandPreview: action.CommandPreview}
 	if err := ctx.Err(); err != nil {
 		return finishActionResult(result, ActionCancelled, nil, err)
 	}
 
 	process := NewProcessManager(r.logBufSize)
 	r.setActionProcess(id, process)
-	pid, err := process.Start(context.Background(), action.Command, action.Dir, action.Env, action.Shell)
+	var pid int
+	var err error
+	// An argument vector is executed without a shell so a parameter value can
+	// never become shell source. A legacy command keeps its existing path.
+	if len(action.Argv) > 0 {
+		pid, err = process.StartArgv(context.Background(), action.Argv, action.Dir, action.Env)
+	} else {
+		pid, err = process.Start(context.Background(), action.Command, action.Dir, action.Env, action.Shell)
+	}
 	if err != nil {
 		return finishActionResult(result, ActionFailed, process, err)
 	}
@@ -565,12 +579,20 @@ func (r *ActionRunner) actionExistsLocked(id config.ActionID) bool {
 func cloneActionResult(result ActionResult) ActionResult {
 	result.Stdout = append([]string(nil), result.Stdout...)
 	result.Stderr = append([]string(nil), result.Stderr...)
+	result.Params = cloneAnyMap(result.Params)
 	return result
 }
 
 // RunAction executes one configured non-interactive action.
 func (m *Manager) RunAction(ctx context.Context, id config.ActionID) (ActionResult, error) {
 	return m.actions.Run(ctx, id)
+}
+
+// RunActionDefinition executes an immutable, already-rendered action
+// definition. It is the path a confirmed parameterized plan uses so execution
+// can never re-resolve a different definition after configuration reload.
+func (m *Manager) RunActionDefinition(ctx context.Context, id config.ActionID, action config.Action) (ActionResult, error) {
+	return m.actions.RunDefinition(ctx, id, action)
 }
 
 // ActionState returns the current or most recent state of an action.

@@ -42,6 +42,8 @@ const (
 	ModeConfirmDeleteRun
 	ModeRuntimeSwitcher
 	ModeRuntimeLost
+	ModeParamEdit
+	ModeParamForm
 )
 
 type runViewMode uint8
@@ -100,6 +102,9 @@ const (
 	actionRowService actionListRowKind = iota
 	actionRowGroup
 	actionRowAction
+	actionRowParam
+	actionRowParamValue
+	actionRowPreview
 )
 
 type actionListRow struct {
@@ -107,6 +112,15 @@ type actionListRow struct {
 	Service *app.ServiceSnapshot
 	Group   string
 	Action  config.ActionID
+	Param   string
+	Value   string
+	Preview string
+	// Continued marks a command row that carries on from the one above it,
+	// so only the first of them wears the prompt.
+	Continued bool
+	// Blocked marks a command row showing the template of a command the
+	// current values cannot build.
+	Blocked bool
 }
 
 type logSearchMode int
@@ -224,6 +238,17 @@ type Model struct {
 	focusedActionGroup  string
 	expandedActionOwner map[string]bool
 
+	// Parameter tree state. Parameters and their values expand inline in the
+	// action list, so a parameterized action is driven without a separate form
+	// screen and the same render feeds the preview and the execution.
+	expandedActionParams map[config.ActionID]bool
+	actionParamValues    map[config.ActionID]map[string]paramUIValue
+	expandedParamOptions map[string]bool
+	focusedParam         *paramRowFocus
+	paramEdit            *paramEditState
+	paramInput           textinput.Model
+	paramForm            *paramFormState
+
 	portDetails  map[int]*config.PortInfo
 	portError    error
 	portService  string
@@ -286,22 +311,27 @@ type Model struct {
 	toastMessage  string
 	toastTimer    time.Time
 
-	confirmAction      string
-	confirmTarget      string
-	confirmRestartAll  bool
-	pendingAction      *config.ActionID
-	pendingActionStop  bool
-	pendingStartNames  []string
-	pendingStartTarget string
-	pendingStartForce  bool
-	pendingStopNames   []string
-	pendingStopTarget  string
-	pendingStopForce   bool
-	pendingStopAll     bool
-	themeSaveScope     themeSaveScope
-	clearTarget        string
-	clearAction        *config.ActionID
-	clearPinned        bool
+	confirmAction     string
+	confirmTarget     string
+	confirmRestartAll bool
+	pendingAction     *config.ActionID
+	pendingActionStop bool
+	// pendingParamRequest and pendingParamToken keep the exact confirmed
+	// parameterized invocation so the confirmation modal can execute the same
+	// rendered plan the form previewed.
+	pendingParamRequest *app.PlanRequest
+	pendingParamToken   string
+	pendingStartNames   []string
+	pendingStartTarget  string
+	pendingStartForce   bool
+	pendingStopNames    []string
+	pendingStopTarget   string
+	pendingStopForce    bool
+	pendingStopAll      bool
+	themeSaveScope      themeSaveScope
+	clearTarget         string
+	clearAction         *config.ActionID
+	clearPinned         bool
 
 	conflictService  string
 	conflictPorts    map[int]*config.PortInfo
@@ -458,44 +488,48 @@ func NewModelWithOptions(cfg *config.Config, version string, options ModelOption
 	rpcClient, _ := application.(*kranzruntime.Client)
 
 	model := &Model{
-		cfg:                 application.Config(),
-		version:             version,
-		workingDirectory:    workingDirectory,
-		app:                 application,
-		detachOnExit:        options.DetachOnExit,
-		programReady:        options.ProgramReady,
-		focusReported:       options.FocusReported,
-		services:            services,
-		allServices:         services,
-		runs:                application.Runs(),
-		actionStates:        make(map[config.ActionID]app.ActionResult),
-		logEntries:          make(map[app.RunTarget][]config.LogEntry),
-		actionLogLines:      make(map[app.RunTarget][]cachedActionLogLine),
-		actionRunLogLines:   make(map[app.RunTarget]map[uint32][]cachedActionLogLine),
-		logCursors:          make(map[app.RunTarget]string),
-		portDetails:         make(map[int]*config.PortInfo),
-		selected:            make(map[string]bool),
-		expandedTags:        make(map[string]bool),
-		expandedActionOwner: make(map[string]bool),
-		panelFocus:          panelServices,
-		listMode:            listServices,
-		logSearcher:         kranzlog.NewSearcher(),
-		pinnedSearcher:      kranzlog.NewSearcher(),
-		runViewports:        make(map[runViewportKey]runViewportState),
-		searchInput:         newSearchInput(),
-		exportInput:         newRunExportInput(),
-		themeColorInput:     newThemeColorInput(),
-		currentMatch:        -1,
-		pinnedMatch:         -1,
-		searchMode:          searchFilter,
-		mode:                ModeNormal,
-		followMode:          true,
-		pinnedFollow:        true,
-		keys:                DefaultKeyMap(),
-		userSettings:        options.Settings,
-		settingsPath:        options.SettingsPath,
-		activeTheme:         activeTheme,
-		terminalDark:        terminalDark,
+		cfg:                  application.Config(),
+		version:              version,
+		workingDirectory:     workingDirectory,
+		app:                  application,
+		detachOnExit:         options.DetachOnExit,
+		programReady:         options.ProgramReady,
+		focusReported:        options.FocusReported,
+		services:             services,
+		allServices:          services,
+		runs:                 application.Runs(),
+		actionStates:         make(map[config.ActionID]app.ActionResult),
+		logEntries:           make(map[app.RunTarget][]config.LogEntry),
+		actionLogLines:       make(map[app.RunTarget][]cachedActionLogLine),
+		actionRunLogLines:    make(map[app.RunTarget]map[uint32][]cachedActionLogLine),
+		logCursors:           make(map[app.RunTarget]string),
+		portDetails:          make(map[int]*config.PortInfo),
+		selected:             make(map[string]bool),
+		expandedTags:         make(map[string]bool),
+		expandedActionOwner:  make(map[string]bool),
+		expandedActionParams: make(map[config.ActionID]bool),
+		actionParamValues:    make(map[config.ActionID]map[string]paramUIValue),
+		expandedParamOptions: make(map[string]bool),
+		panelFocus:           panelServices,
+		listMode:             listServices,
+		logSearcher:          kranzlog.NewSearcher(),
+		pinnedSearcher:       kranzlog.NewSearcher(),
+		runViewports:         make(map[runViewportKey]runViewportState),
+		searchInput:          newSearchInput(),
+		paramInput:           newParamInput(),
+		exportInput:          newRunExportInput(),
+		themeColorInput:      newThemeColorInput(),
+		currentMatch:         -1,
+		pinnedMatch:          -1,
+		searchMode:           searchFilter,
+		mode:                 ModeNormal,
+		followMode:           true,
+		pinnedFollow:         true,
+		keys:                 DefaultKeyMap(),
+		userSettings:         options.Settings,
+		settingsPath:         options.SettingsPath,
+		activeTheme:          activeTheme,
+		terminalDark:         terminalDark,
 		// The executable already performed the initial detection. Suppress the
 		// focus event emitted immediately after focus reporting is enabled.
 		lastBackgroundProbe: time.Now(),
@@ -582,6 +616,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.themeColorInput, searchCommand = m.themeColorInput.Update(msg)
 		} else if m.mode == ModeRunExport {
 			m.exportInput, searchCommand = m.exportInput.Update(msg)
+		} else if m.mode == ModeParamEdit {
+			m.paramInput, searchCommand = m.paramInput.Update(msg)
 		}
 		if m.focusReported != nil {
 			m.focusReported()
@@ -601,6 +637,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.handleActionResult(msg)
+	case actionPlanMsg:
+		if msg.sessionGen != m.sessionGeneration {
+			return m, nil
+		}
+		return m.handleActionPlan(msg)
 	case releasePortResultMsg:
 		if msg.sessionGen != m.sessionGeneration {
 			return m, nil
@@ -737,6 +778,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var command tea.Cmd
 			m.themeColorInput, command = m.themeColorInput.Update(msg)
 			m.sanitizeThemeColorInput()
+			return m, command
+		}
+		if m.mode == ModeParamEdit {
+			var command tea.Cmd
+			m.paramInput, command = m.paramInput.Update(msg)
 			return m, command
 		}
 		return m, nil

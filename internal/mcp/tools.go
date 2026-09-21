@@ -72,7 +72,7 @@ func (s *Server) installTools() {
 			"selectors":        selectorsProperty,
 			"limit":            map[string]any{"type": "integer", "minimum": 0, "maximum": maxChangeEvents},
 		}), scoped: (*scope).changesTool},
-		{Name: "plan", Description: "Resolve a versioned start, stop, restart, or action plan without executing it.", InputSchema: objectSchema(map[string]any{"operation": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "action"}}, "selectors": selectorsProperty, "include_dependencies": map[string]any{"type": "boolean"}, "action": map[string]any{"type": "string"}}, "operation"), scoped: (*scope).planTool},
+		{Name: "plan", Description: "Resolve a versioned start, stop, restart, or action plan without executing it. A parameterized action takes the same typed params object action_run takes, and the plan carries the exact command it would run.", InputSchema: objectSchema(map[string]any{"operation": map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "action"}}, "selectors": selectorsProperty, "include_dependencies": map[string]any{"type": "boolean"}, "action": map[string]any{"type": "string"}, "params": map[string]any{"type": "object", "description": "Typed parameter values for a parameterized action."}}, "operation"), scoped: (*scope).planTool},
 		{Name: "graph", Description: "Return the declared dependency, prerequisite, and ownership graph with live service state folded in.", InputSchema: objectSchema(map[string]any{}), scoped: (*scope).graphTool},
 		{Name: "ports", Description: "Inspect declared and detected service ports without changing their owners.", InputSchema: objectSchema(map[string]any{"selectors": selectorsProperty}), scoped: (*scope).portsTool},
 		{Name: "port_inspect", Description: "Identify the current listener on explicit port numbers, including processes Kranz does not manage.", InputSchema: objectSchema(map[string]any{"ports": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535}}}, "ports"), scoped: (*scope).portInspectTool},
@@ -86,7 +86,7 @@ func (s *Server) installTools() {
 		{Name: "start", Description: "Start selected services using the resolved application plan.", InputSchema: mutationSchema(true), scoped: (*scope).startTool},
 		{Name: "stop", Description: "Stop selected services and affected dependents using the resolved application plan.", InputSchema: mutationSchema(false), scoped: (*scope).stopTool},
 		{Name: "restart", Description: "Restart selected services and affected dependents using the resolved application plan.", InputSchema: mutationSchema(false), scoped: (*scope).restartTool},
-		{Name: "action_run", Description: "Run one non-interactive action. MCP request cancellation does not cancel the action.", InputSchema: objectSchema(map[string]any{"action": map[string]any{"type": "string"}, "confirmation_token": confirmationProperty}, "action"), scoped: (*scope).actionRunTool},
+		{Name: "action_run", Description: "Run one non-interactive action. Pass a typed params object for a parameterized action; action_info returns its advisory schema. MCP request cancellation does not cancel the action.", InputSchema: objectSchema(map[string]any{"action": map[string]any{"type": "string"}, "params": map[string]any{"type": "object", "description": "Typed parameter values for a parameterized action."}, "confirmation_token": confirmationProperty}, "action"), scoped: (*scope).actionRunTool},
 		{Name: "action_cancel", Description: "Explicitly cancel a currently running non-interactive action.", InputSchema: objectSchema(map[string]any{"action": map[string]any{"type": "string"}}, "action"), scoped: (*scope).actionCancelTool},
 		{Name: "reload", Description: "Re-read the configuration from disk and reconcile it into the running services. Use it after editing a Kranz configuration file.", InputSchema: objectSchema(map[string]any{"force": map[string]any{"type": "boolean", "description": "Reload even when no watched file changed."}}), scoped: (*scope).reloadTool},
 		{Name: "logs_clear", Description: "Clear explicitly selected bounded service/action log buffers.", InputSchema: objectSchema(map[string]any{"selectors": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string"}}, "with_actions": map[string]any{"type": "boolean"}}, "selectors"), scoped: (*scope).logsClearTool},
@@ -291,10 +291,11 @@ func (s *scope) statusTool(_ context.Context, raw json.RawMessage) ResultEnvelop
 }
 
 type planArgs struct {
-	Operation           string   `json:"operation"`
-	Selectors           []string `json:"selectors"`
-	IncludeDependencies *bool    `json:"include_dependencies"`
-	Action              string   `json:"action"`
+	Operation           string                     `json:"operation"`
+	Selectors           []string                   `json:"selectors"`
+	IncludeDependencies *bool                      `json:"include_dependencies"`
+	Action              string                     `json:"action"`
+	Params              map[string]json.RawMessage `json:"params"`
 }
 
 func (s *scope) planRequest(args planArgs) (app.PlanRequest, error) {
@@ -311,6 +312,10 @@ func (s *scope) planRequest(args planArgs) (app.PlanRequest, error) {
 			return request, err
 		}
 		request.Action = id
+		// A parameterized plan is the one place a caller can see the exact
+		// invocation before anything runs, so it takes the same values the run
+		// would take.
+		request.Params = args.Params
 	}
 	return request, nil
 }
@@ -538,8 +543,9 @@ func (s *scope) restartTool(ctx context.Context, raw json.RawMessage) ResultEnve
 
 func (s *scope) actionRunTool(ctx context.Context, raw json.RawMessage) ResultEnvelope {
 	var args struct {
-		Action            string `json:"action"`
-		ConfirmationToken string `json:"confirmation_token"`
+		Action            string                     `json:"action"`
+		Params            map[string]json.RawMessage `json:"params"`
+		ConfirmationToken string                     `json:"confirmation_token"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return s.argError(err)
@@ -557,7 +563,7 @@ func (s *scope) actionRunTool(ctx context.Context, raw json.RawMessage) ResultEn
 	}
 	done := make(chan execution, 1)
 	go func() {
-		result, err := s.api.ExecutePlan(context.WithoutCancel(ctx), app.PlanRequest{Operation: "action", Action: id}, args.ConfirmationToken)
+		result, err := s.api.ExecutePlan(context.WithoutCancel(ctx), app.PlanRequest{Operation: "action", Action: id, Params: args.Params}, args.ConfirmationToken)
 		done <- execution{result: result, err: err}
 	}()
 	var result app.OperationResult

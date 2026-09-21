@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -234,5 +235,66 @@ func TestReloadForgetsSatisfiedPrerequisiteWhenCommandChanges(t *testing.T) {
 	}
 	if got := prerequisiteRunCount(t, counter); got != 2 {
 		t.Fatalf("prerequisite ran %d times after its command changed, want 2", got)
+	}
+}
+
+// parameterizedPrerequisites gives two services the same group action with the
+// static values each one declares, appending the rendered value to a counter
+// file so both how often it ran and what it ran with are observable.
+func parameterizedPrerequisites(t *testing.T, first, second map[string]any) (*Manager, string) {
+	t.Helper()
+	directory := t.TempDir()
+	counter := filepath.Join(directory, "runs")
+	script := filepath.Join(directory, "record.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.2\nprintf '%s\\n' \"$1\" >> "+counter+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(&config.Config{
+		Project: "Prerequisites",
+		ActionGroups: map[string]config.ActionGroup{
+			"infra": {Actions: map[string]config.Action{
+				"up": {
+					Params:     map[string]config.ActionParam{"env": {Type: "select", Options: config.ActionParamOptions{{Value: "dev"}, {Value: "prod"}}, Required: true}},
+					ParamOrder: []string{"env"},
+					Argv:       config.ArgvList{script, "{{env}}"},
+					Dir:        directory,
+				},
+			}},
+		},
+		Services: map[string]config.Service{
+			"api": {Command: "sleep 60", BeforeStart: []config.Prerequisite{{Group: "infra", Action: "up", Params: first}}},
+			"web": {Command: "sleep 60", BeforeStart: []config.Prerequisite{{Group: "infra", Action: "up", Params: second}}},
+		},
+	})
+	t.Cleanup(func() { manager.Shutdown() })
+	return manager, counter
+}
+
+func TestPrerequisiteCoalescesOnlyTheSameInvocation(t *testing.T) {
+	same, counter := parameterizedPrerequisites(t, map[string]any{"env": "dev"}, map[string]any{"env": "dev"})
+	if err := same.StartServicesContext(context.Background(), []string{"api", "web"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prerequisiteRunCount(t, counter); got != 1 {
+		t.Fatalf("the same invocation ran %d times, want 1", got)
+	}
+
+	// Different values are a different prerequisite: collapsing them would
+	// start one service against an environment it never asked for.
+	differing, otherCounter := parameterizedPrerequisites(t, map[string]any{"env": "dev"}, map[string]any{"env": "prod"})
+	if err := differing.StartServicesContext(context.Background(), []string{"api", "web"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prerequisiteRunCount(t, otherCounter); got != 2 {
+		t.Fatalf("two invocations ran %d times, want 2", got)
+	}
+	content, err := os.ReadFile(otherCounter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := strings.Fields(string(content))
+	sort.Strings(recorded)
+	if len(recorded) != 2 || recorded[0] != "dev" || recorded[1] != "prod" {
+		t.Fatalf("recorded values = %#v", recorded)
 	}
 }

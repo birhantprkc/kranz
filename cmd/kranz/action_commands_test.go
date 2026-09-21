@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	kranzcli "github.com/kranz-org/kranz/internal/cli"
+	"github.com/kranz-org/kranz/internal/config"
 )
 
 const actionProject = `project: Actions
@@ -138,5 +140,186 @@ func TestActionOutputLinesAreOneLineEach(t *testing.T) {
 	}
 	if empty := actionOutputLines(nil); empty == nil {
 		t.Error("nil output must still encode as an empty JSON array")
+	}
+}
+
+const parameterizedProject = `project: Parameterized
+action_groups:
+  infra:
+    actions:
+      seed:
+        description: Seed one environment.
+        params:
+          env:
+            type: select
+            options: [dev, prod]
+            default: dev
+            arg: "--env"
+            prompt: Target environment
+          targets:
+            type: checkbox
+            options: [phone, watch]
+            optional: true
+            arg: "--target"
+          note:
+            type: text
+            optional: true
+            arg: "--note"
+          write:
+            type: checkbox
+            default: false
+            flag: --write
+            confirm: This writes to the target environment
+        argv: [./seed.sh, "{{env}}", "{{targets}}"]
+      plain:
+        command: echo plain
+`
+
+func parameterizedDirectory(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "kranz.yaml"), []byte(parameterizedProject), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func parameterizedAction(t *testing.T, directory, name string) (config.ActionID, config.Action) {
+	t.Helper()
+	cfg, err := config.Load(filepath.Join(directory, "kranz.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := config.ActionID{OwnerKind: config.ActionOwnerGroup, Owner: "infra", Name: name}
+	action, ok := cfg.ResolveAction(id)
+	if !ok {
+		t.Fatalf("action %q not found", name)
+	}
+	return id, action
+}
+
+func TestActionListAndInfoAnnounceParameters(t *testing.T) {
+	directory := parameterizedDirectory(t)
+
+	list := runInspection(t, directory, "actions")
+	if !strings.Contains(list, "PARAMETERS") {
+		t.Fatalf("action list hides whether an action takes parameters: %q", list)
+	}
+
+	info := runInspection(t, directory, "actions", "info", "infra/seed")
+	for _, fragment := range []string{"env", "[dev|prod]", "default dev", "Target environment", "targets", "note", "Values that ask", "This writes to the target environment"} {
+		if !strings.Contains(info, fragment) {
+			t.Errorf("action info omits %q: %q", fragment, info)
+		}
+	}
+
+	plain := runInspection(t, directory, "actions", "info", "infra/plain")
+	if strings.Contains(plain, "Parameters:") || strings.Contains(plain, "Values that ask") {
+		t.Errorf("a plain action reports parameter sections: %q", plain)
+	}
+}
+
+func TestEncodeActionParamsRejectsMalformedFlags(t *testing.T) {
+	directory := parameterizedDirectory(t)
+	id, action := parameterizedAction(t, directory, "seed")
+
+	cases := map[string][]string{
+		"unknown name":         {"nope=1"},
+		"missing equals":       {"env"},
+		"empty name":           {"=dev"},
+		"value outside enum":   {"env=staging"},
+		"repeated single name": {"env=dev", "env=prod"},
+	}
+	for name, flags := range cases {
+		if _, err := encodeActionParams(id, action, flags); err == nil {
+			t.Errorf("%s accepted: %v", name, flags)
+		}
+	}
+}
+
+func TestEncodeActionParamsKeepsValuesWhole(t *testing.T) {
+	directory := parameterizedDirectory(t)
+	id, action := parameterizedAction(t, directory, "seed")
+
+	// Only the first '=' separates the name, so a value may contain its own.
+	encoded, err := encodeActionParams(id, action, []string{"note=key=value; rm -rf /"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var note string
+	if err := json.Unmarshal(encoded["note"], &note); err != nil {
+		t.Fatal(err)
+	}
+	if note != "key=value; rm -rf /" {
+		t.Fatalf("note = %q", note)
+	}
+
+	// A checkbox group is the one control a repeated name adds to.
+	group, err := encodeActionParams(id, action, []string{"targets=phone", "targets=watch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets []string
+	if err := json.Unmarshal(group["targets"], &targets); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0] != "phone" || targets[1] != "watch" {
+		t.Fatalf("targets = %#v", targets)
+	}
+}
+
+func TestEncodeActionParamsSeparatesNoValuesFromNoParameters(t *testing.T) {
+	directory := parameterizedDirectory(t)
+
+	id, action := parameterizedAction(t, directory, "seed")
+	empty, err := encodeActionParams(id, action, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A parameterized action always sends an object, so the runtime can tell a
+	// current client running on defaults from one that predates parameters.
+	if empty == nil {
+		t.Fatal("a parameterized action sent no parameter object at all")
+	}
+	if len(empty) != 0 {
+		t.Fatalf("defaults were filled in by the client: %#v", empty)
+	}
+
+	plainID, plain := parameterizedAction(t, directory, "plain")
+	none, err := encodeActionParams(plainID, plain, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none != nil {
+		t.Fatalf("an action without parameters sent an object: %#v", none)
+	}
+	if _, err := encodeActionParams(plainID, plain, []string{"env=dev"}); err == nil {
+		t.Fatal("--param on an action without parameters was accepted")
+	}
+}
+
+func TestNoParamLeavesAParameterOutEntirely(t *testing.T) {
+	directory := parameterizedDirectory(t)
+	id, action := parameterizedAction(t, directory, "seed")
+
+	// Omitting the flag falls back to the declared default.
+	withDefault, err := encodeActionParams(id, action, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := withDefault["env"]; present {
+		t.Fatalf("the client filled in a default: %#v", withDefault)
+	}
+
+	// Naming it with --no-param says "leave it out", which travels as null.
+	omitted, err := encodeActionParams(id, action, []string{"env" + omittedParamSuffix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(omitted["env"]) != "null" {
+		t.Fatalf("omitted parameter = %s", omitted["env"])
+	}
+	if _, err := encodeActionParams(id, action, []string{"nope" + omittedParamSuffix}); err == nil {
+		t.Fatal("--no-param accepted an unknown parameter")
 	}
 }

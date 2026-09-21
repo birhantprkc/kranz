@@ -162,6 +162,10 @@ var handlers = map[string]handlerFunc{
 		action, lease, err := l.AcquireInteractiveActionContext(ctx, req.ID)
 		return acquireInteractiveActionResponse{Action: action, Lease: lease}, err
 	}),
+	methodAcquireInteractivePlan: handler(func(ctx context.Context, l *app.Local, req executePlanRequest) (acquireInteractivePlanResponse, error) {
+		plan, action, lease, err := l.AcquireInteractivePlan(ctx, req.Request, req.ConfirmationToken)
+		return acquireInteractivePlanResponse{Plan: plan, Action: action, Lease: lease}, err
+	}),
 	methodCompleteInteractiveAction: handler(func(_ context.Context, l *app.Local, req completeInteractiveActionRequest) (app.ActionResult, error) {
 		var execErr error
 		if req.ExecErr != "" {

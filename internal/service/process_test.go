@@ -174,3 +174,27 @@ func TestProcessManagerConcurrentStopIsIdempotent(t *testing.T) {
 		t.Fatalf("stale process state: PID=%d running=%v", pm.PID(), pm.IsRunning())
 	}
 }
+
+func TestStartArgvKeepsEveryElementOneArgument(t *testing.T) {
+	pm := NewProcessManager(32)
+	// Each element carries syntax a shell would act on. Reaching echo intact
+	// is what proves no shell sat between the vector and the process.
+	argv := []string{"/bin/echo", "a b", "*", "$HOME", "; id", "|", "&&", `"quoted"`}
+	if _, err := pm.StartArgv(context.Background(), argv, ".", nil); err != nil {
+		t.Fatalf("StartArgv() error = %v", err)
+	}
+	if err := pm.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	want := strings.Join(argv[1:], " ") + "\n"
+	if got := strings.Join(pm.Stdout().Lines(), ""); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestStartArgvRequiresAnExecutable(t *testing.T) {
+	pm := NewProcessManager(32)
+	if _, err := pm.StartArgv(context.Background(), nil, ".", nil); err == nil {
+		t.Fatal("an empty vector started a process")
+	}
+}

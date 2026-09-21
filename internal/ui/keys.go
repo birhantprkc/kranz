@@ -37,6 +37,7 @@ type KeyMap struct {
 	LogTime       key.Binding
 	Freeze        key.Binding
 	Clear         key.Binding
+	Disable       key.Binding
 	Help          key.Binding
 	ConfigMap     key.Binding
 	ClearSearch   key.Binding
@@ -170,6 +171,10 @@ func DefaultKeyMap() KeyMap {
 		Clear: key.NewBinding(
 			key.WithKeys("c"),
 			key.WithHelp("c", "clear logs"),
+		),
+		Disable: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "disable parameter"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),

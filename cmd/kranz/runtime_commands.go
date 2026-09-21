@@ -972,6 +972,11 @@ func classifyRuntimeError(err error) error {
 		resolved := plan.Operation + " " + strings.Join(plan.Targets, ", ")
 		if plan.Operation == "action" {
 			resolved = "action " + plan.Action
+			// What is being confirmed is one exact invocation, so the command
+			// it resolved to is part of the question, not a detail to look up.
+			if plan.CommandPreview != "" {
+				resolved += ", command " + plan.CommandPreview
+			}
 		}
 		return &kranzcli.Error{
 			Code:     "confirmation_required",

@@ -486,16 +486,32 @@ func validateInteractiveLease(msg envelope, leases *connectionLeases) error {
 
 func trackInteractiveLease(msg envelope, result any, leases *connectionLeases) error {
 	switch msg.Method {
-	case methodAcquireInteractiveAction:
-		var req actionIDRequest
-		if err := json.Unmarshal(msg.Body, &req); err != nil {
-			return fmt.Errorf("track acquired interactive action: %w", err)
+	case methodAcquireInteractiveAction, methodAcquireInteractivePlan:
+		var id config.ActionID
+		if msg.Method == methodAcquireInteractiveAction {
+			var req actionIDRequest
+			if err := json.Unmarshal(msg.Body, &req); err != nil {
+				return fmt.Errorf("track acquired interactive action: %w", err)
+			}
+			id = req.ID
+		} else {
+			var req executePlanRequest
+			if err := json.Unmarshal(msg.Body, &req); err != nil {
+				return fmt.Errorf("track acquired interactive plan: %w", err)
+			}
+			id = req.Request.Action
 		}
-		response, ok := result.(acquireInteractiveActionResponse)
-		if !ok || response.Lease == "" {
+		var lease string
+		switch response := result.(type) {
+		case acquireInteractiveActionResponse:
+			lease = response.Lease
+		case acquireInteractivePlanResponse:
+			lease = response.Lease
+		}
+		if lease == "" {
 			return errors.New("track acquired interactive action: invalid response")
 		}
-		leases.add(req.ID, response.Lease)
+		leases.add(id, lease)
 	case methodCompleteInteractiveAction:
 		var req completeInteractiveActionRequest
 		if err := json.Unmarshal(msg.Body, &req); err != nil {
