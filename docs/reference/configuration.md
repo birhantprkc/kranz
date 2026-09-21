@@ -797,7 +797,7 @@ The same shape for service actions and group actions:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `command` | string | — | **Required** |
+| `command` | string | — | Shell command; required unless `run`, `argv`, or `params` is set |
 | `description` | string | — | What it does, shown beside the name |
 | `dir` | string | owner's `dir` | Working directory |
 | `shell` | string | owner's `shell` | Shell |
@@ -806,9 +806,93 @@ The same shape for service actions and group actions:
 | `timeout` | duration | none | Deadline for the whole process group |
 | `confirm` | bool | `false` | Ask before running |
 | `interactive` | bool | `false` | Hand the terminal to the command |
+| `run` | string list | — | Fixed argument vector; parameter projections are appended |
+| `argv` | string list | — | Explicit argument vector with `&#123;&#123;name&#125;&#125;` placeholders |
+| `params` | map | `{}` | Typed parameters for a parameterized action |
 
 The action's key is its name in the list; `description` explains it. Keep keys
 short and stable — `migrate`, not `run-the-database-migrations`.
+
+### Parameterized actions
+
+A parameterized action declares typed controls under `params` and either a
+fixed `run` (projections appended in declaration order) or an explicit `argv`
+template. The command runs without a shell, so a value stays one process
+argument and can never become shell syntax.
+
+```yaml
+action_groups:
+  infra:
+    actions:
+      seed:
+        params:
+          env:
+            type: select
+            options: [dev, staging, prod]
+            default: dev
+            prompt: Target environment
+          count:
+            type: number
+            min: 1
+            max: 10000
+            default: 100
+          dry_run:
+            type: checkbox
+            default: true
+            env: DRY_RUN
+            confirm: This can modify stored data
+        run: [./seed.sh]
+        env:
+          ENV_NAME: "{{env}}"
+```
+
+Controls: `checkbox` (boolean, or an array when `options` is set), `radio` and
+`select` (one string), `text` (string), `number` (integer).
+
+Each parameter declares exactly one of `default`, `required: true`, or
+`optional: true`, and at most one projection:
+
+| Projection | Meaning | Example result |
+| --- | --- | --- |
+| `flag: --clean` | boolean true adds the flag | `--clean` |
+| `arg: --client` | flag and value as two elements | `--client all` |
+| `arg: --target=` | joined into one element | `--target=phone` |
+| `positional: true` | the value alone | `deploy` |
+| `env: DRY_RUN` | environment variable | `DRY_RUN=1` |
+
+An `options` list may instead map each value to an option node carrying `flag`,
+`args`, `label`, `confirm`, or its own `run`. When every option of a `radio` or
+`select` carries `run`, the selected option supplies the whole command.
+
+In an `argv` template, `&#123;&#123;name&#125;&#125;` means one of two things by position. An
+element that is nothing but the placeholder inserts that parameter's whole
+projection, which is zero, one, or several arguments; the same placeholder
+inside surrounding text inserts the value as a literal:
+
+```yaml
+argv: ["./tool", "subcommand", "{{verbose}}", "--label=build-{{target}}"]
+```
+
+With `verbose` projecting `flag: --verbose` and `target` holding `phone`, that
+renders `./tool subcommand --verbose --label=build-phone`. Values are
+substituted once: a value that itself contains `&#123;&#123;...&#125;&#125;` stays literal.
+
+A `$` in any configuration value is expanded from the environment and the
+adjacent `.env` before the file is parsed. Write `$$` for a literal dollar, for
+example a shell loop variable inside a `command`.
+
+Placeholders belong in `argv`. A `&#123;&#123;name&#125;&#125;` in `run` is a configuration error,
+because `run` is a fixed vector whose projections are appended after it.
+`argv[0]` is the executable and takes no placeholder, and an action that
+declares `run`, `argv`, or `params` cannot declare `shell`: it never reaches
+one.
+
+Prerequisite `params` are static values checked when the configuration loads.
+`before_start` entries gain one field:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `params` | map | `{}` | Static values for the referenced action's parameters |
 
 ## UI
 

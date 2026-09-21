@@ -30,6 +30,53 @@ modal actions, search controls, and the theme picker.
 | `Shift+A` | Confirm stop all |
 | `Shift+T` | Clear tag selection |
 
+### Action parameters
+
+An action whose command is assembled from values ends in `◆`, and `c` opens
+those values as a form. `Enter` opens its
+parameters, then opens one parameter: a checkbox toggles, a list of options
+opens for `Enter` or `Space` on the chosen value, and a text or number parameter becomes
+editable in place, where `Enter` keeps what was typed and `Esc` restores the
+previous value. `Space` marks a value without opening anything, `←` and `→` walk a list of
+values or count a number up and down (by ten with `Shift`), and `d` switches a
+parameter off entirely, so it reads `DISABLED` and contributes nothing — which
+is different from holding its default. A parameter that takes a set of
+values draws its options as `▣`/`▢` boxes and keeps every one that is checked; a
+parameter that takes one draws them as `◉`/`○`. A typed value is underlined, the
+way an input field is.
+
+The first row under an open action is the exact invocation, marked with `$` the
+way run output is. When the current values cannot build one, that row turns red
+and shows the template instead, the value that blocks it is red, and its name
+carries the accent; what is actually wrong is said in the details panel. `s` runs
+the action from its own row or from the command row — a parameter row offers
+neither run nor start, only the form — and a value that asks for confirmation
+opens the usual modal showing that same invocation. While a parameter row is
+focused, the details panel describes what that parameter accepts, what it holds,
+which of its values ask before they run, and, while one is being typed, how to
+keep or discard it.
+
+### The parameter form
+
+`c` opens the same values as a form, with the command they build pinned above
+the fields. It is the better place for an action with more than a couple of
+settings, or when the tree has scrolled the command out of sight. Under each
+field is the line that says what it accepts, and that same line turns red with
+the reason when the value stops satisfying it.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` or `k` `j` | Move between fields |
+| `←` `→` or `h` `l` | Move through a field's values, choosing as it goes for a single choice |
+| `Space` | Check a box, or add and remove one value of a set |
+| `Shift` + `←` `→` | Count a number by ten |
+| `d` | Switch the parameter off, so it is left out of the command |
+| `Enter` | Type into a text or number field; `Enter` keeps it and `Esc` discards it |
+| `s` | Run what the command line shows |
+| `Esc` | Close the form |
+
+Outside a parameterized action `c` keeps its usual meaning of clearing logs.
+
 Starting includes transitive dependencies. Stopping includes transitive
 dependents in reverse order. `Shift+S` is the explicit override in both
 directions.

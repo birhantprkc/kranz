@@ -91,6 +91,22 @@ no toggle or generic application-method dispatcher.
 Every tool declares an `outputSchema` for the result envelope, and returns the
 envelope as `structuredContent` as well as JSON text.
 
+`action_info` returns each parameter's control, values, default, and the limits
+a value has to satisfy, plus a `params_schema` JSON Schema fragment. `action_list` marks actions with
+parameters. `action_run` accepts a typed `params` object; the schema is
+advisory (a tool input schema is static), so the runtime revalidates every
+value. A parameter sent as `null` is left out of the invocation entirely, which is not
+the same as omitting it from the object: that falls back to the declared
+default. An invalid value returns `invalid_arguments` with a `fields` map, and a
+confirmation response echoes the normalized params and the command preview so
+the retry can pass the same values with the token. The preview spells a value
+that reaches the command through the environment as the assignment a shell would
+write, so no parameter is invisible in the line that says what will run. A parameterized action
+requires the `params` object to be present, even when it is empty and every
+value comes from a default: omitting it identifies a caller that predates
+parameters and returns `invalid_arguments` rather than running on values the
+caller never saw.
+
 Selectors resolve an exact service first and then a case-insensitive tag.
 Actions always use `OWNER/ACTION`. `start` defaults
 `include_dependencies` to true; false keeps the resolved exact targets.

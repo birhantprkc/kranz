@@ -27,7 +27,7 @@ terminal tabs, alongside Docker Compose when containers remain the right home
 for infrastructure.
 
 <p align="center">
-  <img src="docs/assets/kranz-demo.gif" alt="Kranz v0.14.0 terminal interface switching between differently themed runtimes, then closing one and choosing the other">
+  <img src="docs/assets/kranz-demo.gif" alt="Kranz v0.16.0 editing a parameterized action and switching between two dark runtimes with distinct accents">
 </p>
 
 ## TUI, CLI, and MCP
@@ -125,6 +125,7 @@ for every command, option, output contract, and exit code.
 - Process recovery with backoff and restart limits
 - Managed and observe-only detached resources with start/stop/status/logs
 - Service actions and project action groups with timeout and confirmation
+- Typed action parameters shared by TUI, CLI, MCP, and prerequisites
 - Prerequisites that must succeed before a service starts
 - Runtime port discovery and ownership-aware conflict handling
 - Searchable, pinnable, timestamped logs in a keyboard and mouse TUI

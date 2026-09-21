@@ -70,6 +70,7 @@ export default defineConfig({
       {
         text: 'Upgrading',
         items: [
+          { text: 'What is new in 0.16', link: '/releases/0.16.0' },
           { text: 'Upgrading to 0.15', link: '/releases/0.15.0' },
           { text: 'Upgrading to 0.8', link: '/releases/0.8.0' }
         ]
@@ -83,6 +84,7 @@ export default defineConfig({
           { text: 'Native YAML', link: '/examples/native' },
           { text: 'Detached lifecycle', link: '/examples/lifecycle' },
           { text: 'Prerequisites', link: '/examples/prerequisites' },
+          { text: 'Action parameters', link: '/examples/action-parameters' },
           { text: 'Process Compose', link: '/examples/process-compose' },
           { text: 'Configuration composition', link: '/examples/composition' },
           { text: 'Full dependency graph', link: '/examples/full-stack' },

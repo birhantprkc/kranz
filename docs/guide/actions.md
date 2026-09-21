@@ -38,6 +38,69 @@ Run the action again and both results remain independently addressable. `[` and
 opens the full run history. The selected run keeps its own scroll and search
 position, so comparing two executions does not lose your place.
 
+## Typed parameters
+
+Use parameters when several actions differ only by a target, count, flag, or
+environment value. One declaration becomes the source of truth for the TUI,
+CLI, MCP, and prerequisites:
+
+```yaml
+actions:
+  seed:
+    params:
+      environment:
+        type: select
+        options: [dev, staging, prod]
+        default: dev
+        arg: --environment
+      count:
+        type: number
+        min: 1
+        max: 10000
+        default: 100
+        arg: --count
+      write:
+        type: checkbox
+        default: false
+        flag: --write
+        confirm: This writes data
+    run: [./seed]
+```
+
+<div class="demo-frame">
+
+![Editing typed action values in the TUI, reviewing the live argv preview, and running the confirmed invocation](../assets/action-parameters.gif)
+
+</div>
+
+Parameterized actions use an argument vector instead of shell interpolation.
+The runtime validates raw values, normalizes defaults, renders the preview and
+executable definition once, and binds confirmation to that exact result. An
+interactive parameterized action hands the same immutable argv to the terminal
+after confirmation; a reload cannot swap in a different command.
+
+The CLI exposes the same schema and values without prompting:
+
+```bash
+kranz actions info tools/seed
+kranz actions run tools/seed \
+  --param environment=staging \
+  --param count=250 \
+  --param write=true \
+  --confirm
+```
+
+<div class="demo-frame">
+
+![Inspecting accepted command parameters in the CLI and running one typed invocation](../assets/command-parameters.gif)
+
+</div>
+
+MCP reads the advisory JSON Schema from `action_info` and sends native values
+in `action_run.params`; the runtime repeats validation at execution. See the
+[runnable action-parameters example](../examples/action-parameters) and the
+[configuration reference](../reference/configuration#parameterized-actions).
+
 ## Project action groups
 
 Use an action group when the operation does not belong to one service:

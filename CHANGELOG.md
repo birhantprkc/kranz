@@ -4,6 +4,38 @@ All notable changes to Kranz are documented here. The project follows [Semantic 
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-21
+
+### Added
+
+- Parameterized actions. One action declares typed controls (`checkbox`,
+  `radio`, `select`, `text`, `number`) under `params` and projects each value
+  into the command through `flag`, `arg`, `positional`, `env`, or an
+  option-level projection. Values reach an action through `kranz actions run
+  --param NAME=VALUE`, the MCP `action_run.params` object, the TUI's inline
+  parameter tree, and static prerequisite `params`. A parameterized action runs
+  an explicit `argv` without a shell, so a value never becomes shell source.
+  Value-dependent `confirm` participates in the plan-bound confirmation token.
+  In the TUI, a text or number parameter is typed in its own row, and `c` opens
+  every value of one action as a form with the command it builds above them. A
+  parameter can be left out of an invocation entirely, with `--no-param NAME`,
+  a `null` in the MCP params object, or `d` in the TUI.
+
+### Fixed
+
+- The TUI can run lifecycle operations for disjoint service sets concurrently.
+  An operation still blocks an overlapping target, while a forced operation
+  cancels only the work that overlaps it.
+- Parameterized interactive actions now execute the exact rendered `argv`
+  reviewed by the confirmation plan. The runtime no longer reacquires the
+  unrendered action after confirmation.
+- `$$` now escapes a dollar in a configuration file. Expansion runs over the
+  whole file before it is parsed, so a shell variable written in a command used
+  to be emptied silently and the command kept running against the wrong value.
+- An override file no longer discards declaration order. Applying one used to
+  reorder a service's or group's actions into map order; action and parameter
+  order now survive the override round trip.
+
 ## [0.15.2] - 2026-09-16
 
 ### Fixed
@@ -865,7 +897,8 @@ artifacts.
 - Explicit global-user and project-config save destinations in the live theme picker.
 - Native compatibility for common Process Compose configurations.
 
-[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.15.2...HEAD
+[Unreleased]: https://github.com/kranz-org/kranz/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/kranz-org/kranz/compare/v0.15.2...v0.16.0
 [0.15.2]: https://github.com/kranz-org/kranz/compare/v0.15.1...v0.15.2
 [0.15.1]: https://github.com/kranz-org/kranz/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/kranz-org/kranz/compare/v0.14.0...v0.15.0

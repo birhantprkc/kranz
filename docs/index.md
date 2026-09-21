@@ -27,6 +27,8 @@ features:
     details: Separate readiness, liveness, lifecycle status, runtime port discovery, and explicit unknown state.
   - title: Operations beside services
     details: Run migrations, builds, checks, and project actions with captured output, timeout, and confirmation.
+  - title: One action, typed inputs
+    details: Replace copied commands with checkbox, choice, text, and number parameters shared by TUI, CLI, MCP, and prerequisites.
   - title: One MCP server, shared live runtimes
     details: Register once, address any project per call, and let agents operate the same supervisor visible in TUI and CLI.
   - title: Runs keep their evidence
@@ -39,7 +41,7 @@ features:
 
 <div class="demo-frame demo-frame--hero">
 
-![Kranz v0.14.0 switching between differently themed runtimes, then closing one and choosing the other](./assets/kranz-demo.gif)
+![Kranz v0.16.0 editing a parameterized action, switching between two dark runtimes with distinct accents, then returning to the first](./assets/kranz-demo.gif)
 
 </div>
 
@@ -76,6 +78,7 @@ Start with [What is Kranz?](./guide/what-is-kranz), then follow the
 | Docker Compose or remote infrastructure | [Detached lifecycle example](./examples/lifecycle) |
 | A larger API/worker graph | [Full-stack example](./examples/full-stack) |
 | Migrations or setup that must run first | [Prerequisites example](./examples/prerequisites) |
+| Repeated commands that differ only by flags or values | [Action parameters example](./examples/action-parameters) |
 | Processes that choose ports at runtime | [Runtime-port laboratory](./examples/runtime-ports) |
 | A coding agent that should join your live stack | [MCP shared-runtime example](./examples/mcp-shared-runtime) |
 

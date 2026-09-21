@@ -1,0 +1,74 @@
+# Parameterized actions.
+#
+# One action carries typed parameters and projects them onto the command, the
+# environment, and the TUI. A parameterized action runs an argument vector
+# without a shell, so a value always stays one process argument.
+
+project: Example Action Parameters
+
+services:
+  api:
+    description: Idle service that seeds its database before starting.
+    command: sleep 300
+    before_start:
+      - group: infra
+        action: seed
+        params:
+          env: dev
+          count: 10
+
+action_groups:
+  infra:
+    description: Database maintenance commands.
+    actions:
+      # An argv template: the {{count}} element inserts the parameter's whole
+      # projection, while {{env}} inside a literal inserts the value.
+      seed:
+        description: Seed one environment, writing only when asked.
+        params:
+          env:
+            type: select
+            options: [dev, staging, prod]
+            default: dev
+            prompt: Target environment
+          count:
+            type: number
+            min: 1
+            max: 10000
+            default: 100
+            arg: "--count"
+          write:
+            type: checkbox
+            default: false
+            env: WRITE
+            confirm: This writes to the target environment
+          label:
+            type: text
+            optional: true
+            max_length: 40
+            arg: "--label"
+            prompt: Label this run
+        argv:
+          - ./seed.sh
+          - "--env={{env}}"
+          - "{{count}}"
+          - "{{label}}"
+
+  checks:
+    description: Guard rails, where each choice runs its own command.
+    actions:
+      check:
+        description: Run one check selected from a short list.
+        params:
+          check:
+            type: radio
+            default: lint
+            options:
+              lint:
+                run: [/bin/echo, "lint passed"]
+              types:
+                run: [/bin/echo, "types passed"]
+          verbose:
+            type: checkbox
+            default: false
+            flag: --verbose

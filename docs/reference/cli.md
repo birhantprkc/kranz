@@ -449,13 +449,25 @@ rather than an address and stays silent when it overlaps the start of history.
 ```bash
 kranz actions [OWNER]
 kranz actions info OWNER/ACTION
-kranz actions run OWNER/ACTION [--confirm]
+kranz actions run OWNER/ACTION [--param NAME=VALUE ...] [--no-param NAME ...] [--confirm]
 ```
 
 An action is identified by owner and name together, so a service action and an
 action-group action may share a name. Running one goes through the runtime,
 which owns the execution slot. A failed action fails the command. Interactive
 actions need the real terminal and are run from the TUI.
+
+A parameterized action takes repeated `--param NAME=VALUE` flags. The first `=`
+separates the name; the rest belongs to the value. Repeating one name is an
+error except for a checkbox group, where each repeat adds a selected value.
+`kranz actions info` prints the accepted parameters, their controls, and the
+limits each one accepts, and values are validated before a runtime call and
+again at the runtime boundary.
+There is no interactive prompt for a missing value. `--no-param NAME` leaves a
+parameter out of the invocation entirely, which is not the same as omitting the
+flag: that falls back to the declared default. A parameter's `confirm`
+turns a run into a confirmed one only for the values that carry it; `kranz
+actions info` lists them under "Values that ask".
 
 For an action with `confirm: true`, the first run attempt is fail-closed and
 returns `confirmation_required` with the exact resolved plan. Review it, then

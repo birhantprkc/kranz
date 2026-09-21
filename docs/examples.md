@@ -13,6 +13,7 @@ Start from the repository root after building or installing Kranz.
   <a class="example-card" href="./examples/native"><strong>Native YAML</strong>Dependencies, a one-shot setup, readiness, and runtime ports.</a>
   <a class="example-card" href="./examples/lifecycle"><strong>Detached lifecycle</strong>Start, stop, observe, and reconnect external resources safely.</a>
   <a class="example-card" href="./examples/prerequisites"><strong>Prerequisites</strong>Migrations and setup that must finish before a service starts.</a>
+  <a class="example-card" href="./examples/action-parameters"><strong>Action parameters</strong>Build one safe argv from choices, numbers, text, checkboxes, and static prerequisite values.</a>
   <a class="example-card" href="./examples/process-compose"><strong>Process Compose</strong>Open an existing compatible configuration directly.</a>
   <a class="example-card" href="./examples/composition"><strong>Configuration composition</strong>Combine autonomous native, Procfile, and Process Compose sources and inspect the result.</a>
   <a class="example-card" href="./examples/full-stack"><strong>Full dependency graph</strong>Two APIs, a gateway, a worker, health gates, and recovery.</a>
@@ -29,6 +30,7 @@ Start from the repository root after building or installing Kranz.
 | How a real `kranz.yaml` is structured | [Native YAML](./examples/native) |
 | Docker/SSH-style resources that survive Kranz | [Detached lifecycle](./examples/lifecycle) |
 | Work that must succeed before a service starts | [Prerequisites](./examples/prerequisites) |
+| One action replacing copied command variants | [Action parameters](./examples/action-parameters) |
 | Whether your existing Process Compose file works | [Process Compose](./examples/process-compose) |
 | How several repositories become one explainable project | [Configuration composition](./examples/composition) |
 | Dependency fan-out, fan-in, health, and recovery | [Full stack](./examples/full-stack) |
